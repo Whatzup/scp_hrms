@@ -1,0 +1,6 @@
+{
+  "name": "SCP HVAC Employee Tool",
+  "description": "A high-fidelity full-stack clone of the SCP HVAC HRMS, showcasing a Neon PostgreSQL database integration, relational schemas, and worker workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
