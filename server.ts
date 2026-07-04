@@ -50,8 +50,15 @@ const inMemoryUsers: any[] = [
 ];
 
 async function initDb() {
-  if (!process.env.DATABASE_URL) {
-    console.warn("⚠️ DATABASE_URL is not configured. Database features will be unavailable.");
+  const hasDbUrl = !!(
+    process.env.NEON_DATABASE_URL ||
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.PGHOST
+  );
+  if (!hasDbUrl) {
+    console.warn("⚠️ Database connection environment variable is not configured. Database features will be unavailable.");
     return false;
   }
 
