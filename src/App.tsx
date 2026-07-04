@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Employee, EmployeeSkill, Client, ClientContact, Site, Project, Task, Department, Attendance, LeaveRequest, LeaveBalance, SalaryStructure, Payroll } from './types';
+import { Employee, EmployeeSkill, Client, ClientContact, Site, Project, Task, Department, Attendance, LeaveRequest, LeaveBalance, SalaryStructure, Payroll, Quotation, PurchaseOrder, SalaryTransferLog, CatalogItem, Vendor, ClientTypeIndustryMapping, User } from './types';
+import { motion, AnimatePresence } from 'motion/react';
 
 // Importing Tab Components
 import Dashboard from './components/Dashboard';
@@ -8,18 +9,24 @@ import Sites from './components/Sites';
 import Clients from './components/Clients';
 import Projects from './components/Projects';
 import Tasks from './components/Tasks';
+import Finance from './components/Finance';
+import LoginScreen from './components/LoginScreen';
+import UsersMgmt from './components/UsersMgmt';
 
 // Lucide Icons
 import { 
   LayoutDashboard, Users, MapPin, Building2, Wrench, 
   ClipboardList, Github, Info, Server, HardHat, Code, Database, RefreshCw, AlertTriangle, CheckCircle,
-  ChevronDown, ChevronRight
+  ChevronDown, ChevronRight, Receipt, FileSpreadsheet, Bell, X, LogOut, Shield
 } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | undefined>(undefined);
-  const [employeesHubOpen, setEmployeesHubOpen] = useState<boolean>(true);
+  const [employeesHubOpen, setEmployeesHubOpen] = useState<boolean>(false);
+  const [operationsHubOpen, setOperationsHubOpen] = useState<boolean>(false);
+  const [financeHubOpen, setFinanceHubOpen] = useState<boolean>(false);
+  const [financeSubTab, setFinanceSubTab] = useState<'quotations' | 'pos'>('quotations');
 
   // Dynamic state stores (fetched dynamically from database only!)
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -37,6 +44,17 @@ export default function App() {
   const [leaveBalances, setLeaveBalances] = useState<LeaveBalance[]>([]);
   const [salaryStructures, setSalaryStructures] = useState<SalaryStructure[]>([]);
   const [payrolls, setPayrolls] = useState<Payroll[]>([]);
+  const [salaryTransfers, setSalaryTransfers] = useState<SalaryTransferLog[]>([]);
+  const [quotations, setQuotations] = useState<Quotation[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [hvacCatalog, setHvacCatalog] = useState<CatalogItem[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [clientTypeIndustryMapping, setClientTypeIndustryMapping] = useState<ClientTypeIndustryMapping[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('scp_current_user');
+    return saved ? JSON.parse(saved) : null;
+  });
 
   // DB Connection Metadata / Diagnostics State
   const [dbStatus, setDbStatus] = useState<{
@@ -51,6 +69,16 @@ export default function App() {
 
   const [loading, setLoading] = useState<boolean>(true);
   const [seeding, setSeeding] = useState<boolean>(false);
+
+  // Toast notifications state
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast(null);
+    }, 4500);
+  };
 
   // Drawer / Explanatory modal
   const [showStackDrawer, setShowStackDrawer] = useState<boolean>(false);
@@ -75,6 +103,13 @@ export default function App() {
         setLeaveBalances(data.leaveBalances || []);
         setSalaryStructures(data.salaryStructures || []);
         setPayrolls(data.payrolls || []);
+        setSalaryTransfers(data.salaryTransfers || []);
+        setQuotations(data.quotations || []);
+        setPurchaseOrders(data.purchaseOrders || []);
+        setHvacCatalog(data.hvacCatalog || []);
+        setVendors(data.vendors || []);
+        setClientTypeIndustryMapping(data.clientTypeIndustryMapping || []);
+        setUsers(data.users || []);
       } else {
         console.error("Failed to load backend records:", res.statusText);
       }
@@ -131,6 +166,113 @@ export default function App() {
   }, []);
 
   // Action Handlers (Proxying edits/creations straight to SQL backend API)
+  const handleAddQuotation = async (newQuote: Quotation) => {
+    try {
+      await fetch('/api/quotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newQuote)
+      });
+      await loadAllData();
+    } catch (err) {
+      console.error("Error adding quotation:", err);
+    }
+  };
+
+  const handleUpdateQuotation = async (updatedQuote: Quotation) => {
+    try {
+      await fetch(`/api/quotations/${updatedQuote.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedQuote)
+      });
+      await loadAllData();
+    } catch (err) {
+      console.error("Error updating quotation:", err);
+    }
+  };
+
+  const handleDeleteQuotation = async (id: string) => {
+    try {
+      // 1. Instantly remove from local UI state
+      setQuotations(prev => prev.filter(q => q.id !== id));
+      
+      // 2. Perform DB deletion in background without awaiting
+      fetch(`/api/quotations/${id}`, { method: 'DELETE' })
+        .then(async (res) => {
+          if (!res.ok) {
+            console.error("Failed to delete quotation on server");
+          }
+          await loadAllData();
+        })
+        .catch(err => {
+          console.error("Error in background deletion of quotation:", err);
+        });
+    } catch (err) {
+      console.error("Error deleting quotation:", err);
+    }
+  };
+
+  const handleAddPurchaseOrder = async (newPo: PurchaseOrder) => {
+    try {
+      await fetch('/api/purchase_orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newPo)
+      });
+      await loadAllData();
+    } catch (err) {
+      console.error("Error adding purchase order:", err);
+    }
+  };
+
+  const handleUpdatePurchaseOrder = async (updatedPo: PurchaseOrder) => {
+    try {
+      await fetch(`/api/purchase_orders/${updatedPo.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedPo)
+      });
+      await loadAllData();
+    } catch (err) {
+      console.error("Error updating purchase order:", err);
+    }
+  };
+
+  const handleDeletePurchaseOrder = async (id: string) => {
+    try {
+      // 1. Instantly remove from local UI state
+      setPurchaseOrders(prev => prev.filter(p => p.id !== id));
+      
+      // 2. Perform DB deletion in background without awaiting
+      fetch(`/api/purchase_orders/${id}`, { method: 'DELETE' })
+        .then(async (res) => {
+          if (!res.ok) {
+            console.error("Failed to delete purchase order on server");
+          }
+          await loadAllData();
+        })
+        .catch(err => {
+          console.error("Error in background deletion of purchase order:", err);
+        });
+    } catch (err) {
+      console.error("Error deleting purchase order:", err);
+    }
+  };
+
+  const handleUpdateCatalogItem = async (updatedItem: CatalogItem) => {
+    try {
+      await fetch(`/api/catalog/${updatedItem.sku}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedItem)
+      });
+      await loadAllData();
+    } catch (err) {
+      console.error("Error updating catalog item:", err);
+    }
+  };
+
   const handleAddEmployee = async (newEmp: Employee, initialSkills: Omit<EmployeeSkill, 'id' | 'employee_id'>[]) => {
     try {
       const parsedSkills = initialSkills.map((sk, idx) => ({
@@ -353,33 +495,166 @@ export default function App() {
   // Expanded Module Operations Handlers
   const handleAddAttendance = async (log: Attendance) => {
     try {
-      await fetch('/api/attendance', {
+      setAttendance(prev => {
+        const filtered = prev.filter(a => a.id !== log.id);
+        return [...filtered, log];
+      });
+
+      const res = await fetch('/api/attendance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(log)
       });
-      await loadAllData();
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        console.error("Server failed to add attendance:", errData.error || res.statusText);
+        await loadAllData();
+      }
     } catch (err) {
       console.error("Error adding attendance log:", err);
+      await loadAllData();
     }
   };
 
   const handleDeleteAttendance = async (id: string) => {
     try {
-      await fetch(`/api/attendance/${id}`, { method: 'DELETE' });
-      await loadAllData();
+      setAttendance(prev => prev.filter(a => a.id !== id));
+
+      const res = await fetch(`/api/attendance/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        console.error("Server failed to delete attendance:", errData.error || res.statusText);
+        await loadAllData();
+      }
     } catch (err) {
       console.error("Error deleting attendance log:", err);
+      await loadAllData();
     }
+  };
+
+  const parseTimeToMinutes = (timeStr: string): number | null => {
+    if (!timeStr) return null;
+    const clean = timeStr.trim().toUpperCase();
+    const ampmMatch = clean.match(/^(\d{1,2})[-:](\d{2})\s*(AM|PM)$/);
+    if (ampmMatch) {
+      let hours = parseInt(ampmMatch[1], 10);
+      const minutes = parseInt(ampmMatch[2], 10);
+      const ampm = ampmMatch[3];
+      if (ampm === 'PM' && hours < 12) hours += 12;
+      if (ampm === 'AM' && hours === 12) hours = 0;
+      return hours * 60 + minutes;
+    }
+    const hhmmMatch = clean.match(/^(\d{1,2})[-:](\d{2})$/);
+    if (hhmmMatch) {
+      const hours = parseInt(hhmmMatch[1], 10);
+      const minutes = parseInt(hhmmMatch[2], 10);
+      return hours * 60 + minutes;
+    }
+    const numbers = clean.match(/\d+/g);
+    if (numbers && numbers.length >= 1) {
+      let hours = parseInt(numbers[0], 10);
+      const minutes = numbers[1] ? parseInt(numbers[1], 10) : 0;
+      const isPm = clean.includes('PM');
+      const isAm = clean.includes('AM');
+      if (isPm && hours < 12) hours += 12;
+      if (isAm && hours === 12) hours = 0;
+      return hours * 60 + minutes;
+    }
+    return null;
+  };
+
+  const formatMinutesToTime = (minutes: number): string => {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    const period = h >= 12 ? 'PM' : 'AM';
+    let displayHour = h % 12;
+    if (displayHour === 0) displayHour = 12;
+    const displayMin = String(m).padStart(2, '0');
+    return `${String(displayHour).padStart(2, '0')}:${displayMin} ${period}`;
   };
 
   const handleAddLeaveRequest = async (lr: LeaveRequest) => {
     try {
-      await fetch('/api/leave_requests', {
+      // 1. Force approval_status to 'Approved'
+      const updatedLr = {
+        ...lr,
+        approval_status: 'Approved' as const,
+        approval_date: new Date().toISOString().split('T')[0],
+        approved_by: 'MGR_ADMIN'
+      };
+
+      // 2. Submit the leave request to the backend
+      const resLr = await fetch('/api/leave_requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(lr)
+        body: JSON.stringify(updatedLr)
       });
+
+      if (!resLr.ok) {
+        throw new Error("Failed to save leave request");
+      }
+
+      // 3. For each day in the leave range, create an attendance log of status 'Leave'
+      const start = new Date(lr.start_date);
+      const end = new Date(lr.end_date);
+      const currentDate = new Date(start);
+
+      while (currentDate <= end) {
+        const dateStr = currentDate.toISOString().split('T')[0];
+        
+        // Find existing non-leave attendance logs on this day for this employee to prevent overlap
+        const existingLogs = attendance.filter(a => a.employee_id === lr.employee_id && a.date === dateStr);
+        const hasLeaveEntry = existingLogs.some(a => a.attendance_status === 'Leave');
+
+        if (!hasLeaveEntry) {
+          let checkIn = '09:00 AM';
+          let checkOut = '06:00 PM';
+          
+          const activeLogs = existingLogs.filter(a => a.attendance_status !== 'Leave');
+          if (activeLogs.length > 0) {
+            // Find a non-overlapping time slot relative to existing logs
+            const firstLog = activeLogs[0];
+            const inMin = parseTimeToMinutes(firstLog.check_in_time) ?? 540;
+            const outMin = parseTimeToMinutes(firstLog.check_out_time) ?? 1080;
+            
+            const spaceBefore = inMin - 480; // 08:00 AM
+            const spaceAfter = 1200 - outMin; // 08:00 PM
+            
+            if (spaceBefore >= spaceAfter && spaceBefore >= 120) {
+              const startMin = Math.max(480, inMin - 240);
+              checkIn = formatMinutesToTime(startMin);
+              checkOut = formatMinutesToTime(inMin);
+            } else {
+              const startMin = outMin;
+              const endMin = Math.min(1200, outMin + 240);
+              checkIn = formatMinutesToTime(startMin);
+              checkOut = formatMinutesToTime(endMin);
+            }
+          }
+
+          const log: Attendance = {
+            id: `ATT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+            employee_id: lr.employee_id,
+            date: dateStr,
+            check_in_time: checkIn,
+            check_out_time: checkOut,
+            total_hours: 8,
+            overtime_hours: 0,
+            attendance_status: 'Leave' as any,
+            location: 'HQ Campus',
+            remarks: `Leave Applied: ${lr.leave_type}. Reason: ${lr.reason}`
+          };
+
+          await fetch('/api/attendance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(log)
+          });
+        }
+
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
       await loadAllData();
     } catch (err) {
       console.error("Error creating leave request:", err);
@@ -401,6 +676,20 @@ export default function App() {
 
   const handleDeleteLeaveRequest = async (id: string) => {
     try {
+      const lr = leaveRequests.find(r => r.id === id);
+      if (lr) {
+        // Also delete associated leave attendance entries for this employee between start_date and end_date
+        const assocAttendance = attendance.filter(a => 
+          a.employee_id === lr.employee_id && 
+          a.attendance_status === 'Leave' &&
+          a.date >= lr.start_date &&
+          a.date <= lr.end_date
+        );
+        for (const log of assocAttendance) {
+          await fetch(`/api/attendance/${log.id}`, { method: 'DELETE' });
+        }
+      }
+
       await fetch(`/api/leave_requests/${id}`, { method: 'DELETE' });
       await loadAllData();
     } catch (err) {
@@ -447,6 +736,19 @@ export default function App() {
     }
   };
 
+  const handleAddSalaryTransfer = async (st: SalaryTransferLog) => {
+    try {
+      await fetch('/api/salary-transfers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(st)
+      });
+      await loadAllData();
+    } catch (err) {
+      console.error("Error creating salary transfer:", err);
+    }
+  };
+
   const handleUpdatePayrollState = async (id: string, update: { payment_status: Payroll['payment_status'], payment_date?: string }) => {
     try {
       await fetch(`/api/payroll/${id}/payment`, {
@@ -469,8 +771,73 @@ export default function App() {
     }
   };
 
+  const handleDeleteSalaryTransfer = async (id: string) => {
+    try {
+      await fetch(`/api/salary-transfers/${id}`, { method: 'DELETE' });
+      await loadAllData();
+    } catch (err) {
+      console.error("Error deleting salary transfer log:", err);
+    }
+  };
+
+  const handleToggleHub = (hub: 'employees' | 'operations' | 'finance') => {
+    if (hub === 'employees') {
+      setEmployeesHubOpen(prev => {
+        const next = !prev;
+        if (next) {
+          setOperationsHubOpen(false);
+          setFinanceHubOpen(false);
+        }
+        return next;
+      });
+    } else if (hub === 'operations') {
+      setOperationsHubOpen(prev => {
+        const next = !prev;
+        if (next) {
+          setEmployeesHubOpen(false);
+          setFinanceHubOpen(false);
+        }
+        return next;
+      });
+    } else if (hub === 'finance') {
+      setFinanceHubOpen(prev => {
+        const next = !prev;
+        if (next) {
+          setEmployeesHubOpen(false);
+          setOperationsHubOpen(false);
+        }
+        return next;
+      });
+    }
+  };
+
   const handleNavigate = (tab: string, item_id?: string) => {
-    setActiveTab(tab);
+    if (tab === 'finance' && item_id) {
+      setActiveTab('finance');
+      if (item_id === 'quotations' || item_id === 'pos') {
+        setFinanceSubTab(item_id);
+      }
+      setFinanceHubOpen(true);
+      setEmployeesHubOpen(false);
+      setOperationsHubOpen(false);
+    } else if (tab === 'quotations' || tab === 'pos') {
+      setActiveTab('finance');
+      setFinanceSubTab(tab === 'quotations' ? 'quotations' : 'pos');
+      setFinanceHubOpen(true);
+      setEmployeesHubOpen(false);
+      setOperationsHubOpen(false);
+    } else {
+      setActiveTab(tab);
+      if (tab === 'employees' || tab === 'attendance' || tab === 'payroll') {
+        setEmployeesHubOpen(true);
+        setOperationsHubOpen(false);
+        setFinanceHubOpen(false);
+      } else if (tab === 'sites' || tab === 'clients' || tab === 'projects' || tab === 'tasks') {
+        setOperationsHubOpen(true);
+        setEmployeesHubOpen(false);
+        setFinanceHubOpen(false);
+      }
+    }
     if (tab === 'employees' && item_id) {
       setSelectedEmployeeId(item_id);
     } else {
@@ -478,84 +845,30 @@ export default function App() {
     }
   };
 
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex flex-col justify-between" id="unauthenticated-root">
+        <LoginScreen onLoginSuccess={setCurrentUser} onShowToast={showToast} />
+        {toast && (
+          <div className="fixed bottom-5 right-5 z-50">
+            <div className={`p-4 rounded-xl shadow-lg border text-xs font-bold transition-all ${
+              toast.type === 'success' 
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+                : toast.type === 'error' 
+                  ? 'bg-rose-50 text-rose-800 border-rose-200' 
+                  : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+            }`}>
+              {toast.message}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50/50 flex flex-col font-sans text-slate-800 antialiased" id="main-app-container">
       
-      {/* Upper Navigation banner explaining clone context */}
-      <div className="bg-indigo-950 text-slate-100 p-4 shrink-0 shadow-md flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-indigo-900" id="clone-explanation-banner">
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="bg-emerald-500 text-slate-950 text-[10px] uppercase font-black px-2 pb-0.5 rounded leading-none shrink-0 tracking-widest shadow-xs">
-              Live Relational SQL Mode
-            </span>
-            <span className="text-slate-550 text-xs">|</span>
-            <span className="text-slate-300 text-xs font-mono font-bold flex items-center gap-1 leading-none">
-              <Github className="w-3.5 h-3.5 text-slate-400" /> Whatzup / scp_int_hrms.git
-            </span>
-          </div>
-          <h1 className="text-xl font-black tracking-tight flex items-center gap-2 font-mono">
-            <HardHat className="w-5.5 h-5.5 text-emerald-400 shrink-0" />
-            Super Cool Projects (SCP) — Neon DB Integration
-          </h1>
-          <p className="text-xs text-indigo-200/90 font-medium max-w-2xl">
-            Connected to <strong>Neon PostgreSQL kd-ac-scp</strong>. Storing, querying, and updating human resources, facilities sites, tasks, and technicians dynamically on Postgres tables.
-          </p>
-        </div>
-
-        {/* Database Status and Seeder Diagnostics bar */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mt-2 md:mt-0" id="db-status-bar">
-          <div className={`p-2 px-3.5 rounded-xl border flex items-center gap-2 text-xs font-semibold ${
-            dbStatus.connected 
-              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
-              : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-          }`}>
-            <Database className="w-4 h-4 shrink-0" />
-            <div className="text-left leading-tight">
-              <p className="font-extrabold flex items-center gap-1">
-                {dbStatus.connected ? (
-                  <>
-                    <CheckCircle className="w-3 h-3 text-emerald-400" />
-                    Neon DB Connected
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle className="w-3 h-3 text-amber-400" />
-                    SQL Unconfigured
-                  </>
-                )}
-              </p>
-              <p className="text-[10px] text-slate-400 font-mono truncate max-w-[200px]" title={dbStatus.message}>
-                {dbStatus.connected ? 'kd-ac-scp schema active' : 'Using backup demo state'}
-              </p>
-            </div>
-          </div>
-
-          <button 
-            id="seed-database-btn"
-            onClick={handleSeedDatabase}
-            disabled={seeding}
-            className={`flex items-center justify-center gap-1.5 p-2.5 px-3.5 rounded-xl text-xs font-black tracking-wider transition-all cursor-pointer border shadow-sm ${
-              seeding 
-                ? 'bg-indigo-900 border-indigo-800 text-slate-400 cursor-not-allowed animate-pulse' 
-                : 'bg-indigo-800 hover:bg-slate-800 text-slate-100 border-indigo-700 hover:border-slate-700'
-            }`}
-            title="Wipes target database tables and seeds base schema"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${seeding ? 'animate-spin' : ''}`} />
-            {seeding ? 'Seeding...' : 'Reset & Seed DB'}
-          </button>
-          
-          <button 
-            id="toggle-repo-details-btn"
-            onClick={() => setShowStackDrawer(!showStackDrawer)}
-            className="flex items-center justify-center gap-1.5 p-2.5 px-3.5 bg-slate-900 hover:bg-slate-800 text-slate-100 rounded-xl text-xs font-black tracking-wider transition-colors cursor-pointer border border-slate-850 shadow-sm"
-          >
-            <Info className="w-3.5 h-3.5 text-emerald-400" />
-            Explain SQL Repo
-          </button>
-        </div>
-      </div>
-
       {loading && employees.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center p-12 bg-white space-y-4">
           <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
@@ -589,139 +902,217 @@ export default function App() {
                     Dashboard Metrics
                   </button>
 
-                  {/* Employees Category Tree Group */}
+                  {/* Employees Category Tree Group (Admin only) */}
+                  {currentUser.role === 'admin' && (
+                    <div className="space-y-1 bg-slate-50/50 p-2 rounded-2xl border border-slate-150">
+                      <button 
+                        onClick={() => handleToggleHub('employees')}
+                        className="w-full flex items-center justify-between p-1.5 px-2 text-[10px] font-black uppercase text-indigo-900/80 tracking-widest cursor-pointer hover:bg-slate-100/50 rounded-xl transition-all"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Users className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                          Employees Hub
+                        </span>
+                        {employeesHubOpen ? (
+                          <ChevronDown className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                        )}
+                      </button>
+                      
+                      {employeesHubOpen && (
+                        <div className="pl-3.5 border-l border-slate-200 ml-3.5 space-y-1 mt-1">
+                          {/* Sub-item: Employees Directory */}
+                          <button 
+                            id="tab-employees"
+                            onClick={() => handleNavigate('employees')}
+                            className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
+                              activeTab === 'employees' 
+                                ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
+                                : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'employees' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                            Employees List
+                          </button>
+
+                          {/* Sub-item: Attendance */}
+                          <button 
+                            id="tab-attendance"
+                            onClick={() => handleNavigate('attendance')}
+                            className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
+                              activeTab === 'attendance' 
+                                ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
+                                : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'attendance' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                            Attendance & Leaves
+                          </button>
+
+                          {/* Sub-item: Payroll */}
+                          <button 
+                            id="tab-payroll"
+                            onClick={() => handleNavigate('payroll')}
+                            className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
+                              activeTab === 'payroll' 
+                                ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
+                                : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'payroll' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                            Payroll & Wages
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Operations Category Tree Group */}
                   <div className="space-y-1 bg-slate-50/50 p-2 rounded-2xl border border-slate-150">
                     <button 
-                      onClick={() => setEmployeesHubOpen(!employeesHubOpen)}
+                      onClick={() => handleToggleHub('operations')}
                       className="w-full flex items-center justify-between p-1.5 px-2 text-[10px] font-black uppercase text-indigo-900/80 tracking-widest cursor-pointer hover:bg-slate-100/50 rounded-xl transition-all"
                     >
                       <span className="flex items-center gap-2">
-                        <Users className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                        Employees Hub
+                        <HardHat className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        Operations Hub
                       </span>
-                      {employeesHubOpen ? (
+                      {operationsHubOpen ? (
                         <ChevronDown className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
                       ) : (
                         <ChevronRight className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                       )}
                     </button>
                     
-                    {employeesHubOpen && (
+                    {operationsHubOpen && (
                       <div className="pl-3.5 border-l border-slate-200 ml-3.5 space-y-1 mt-1">
-                        {/* Sub-item: Employees Directory */}
+                        {/* Sub-item: Clients */}
                         <button 
-                          id="tab-employees"
-                          onClick={() => handleNavigate('employees')}
+                          id="tab-clients"
+                          onClick={() => handleNavigate('clients')}
                           className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
-                            activeTab === 'employees' 
+                            activeTab === 'clients' 
                               ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
                               : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
                           }`}
                         >
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'employees' ? 'bg-white' : 'bg-slate-400'}`}></span>
-                          Employees List
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'clients' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                          Corporate Clients
                         </button>
 
-                        {/* Sub-item: Attendance */}
+                        {/* Sub-item: Sites */}
                         <button 
-                          id="tab-attendance"
-                          onClick={() => handleNavigate('attendance')}
+                          id="tab-sites"
+                          onClick={() => handleNavigate('sites')}
                           className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
-                            activeTab === 'attendance' 
+                            activeTab === 'sites' 
                               ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
                               : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
                           }`}
                         >
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'attendance' ? 'bg-white' : 'bg-slate-400'}`}></span>
-                          Attendance Register
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'sites' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                          Serviced Facility Sites
                         </button>
 
-                        {/* Sub-item: Leave Management */}
+                        {/* Sub-item: Projects */}
                         <button 
-                          id="tab-leaves"
-                          onClick={() => handleNavigate('leaves')}
+                          id="tab-projects"
+                          onClick={() => handleNavigate('projects')}
                           className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
-                            activeTab === 'leaves' 
+                            activeTab === 'projects' 
                               ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
                               : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
                           }`}
                         >
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'leaves' ? 'bg-white' : 'bg-slate-400'}`}></span>
-                          Leave Management
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'projects' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                          HVAC Service Jobs
                         </button>
 
-                        {/* Sub-item: Payroll */}
+                        {/* Sub-item: Tasks */}
                         <button 
-                          id="tab-payroll"
-                          onClick={() => handleNavigate('payroll')}
+                          id="tab-tasks"
+                          onClick={() => handleNavigate('tasks')}
                           className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
-                            activeTab === 'payroll' 
+                            activeTab === 'tasks' 
                               ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
                               : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
                           }`}
                         >
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'payroll' ? 'bg-white' : 'bg-slate-400'}`}></span>
-                          Payroll & Wages
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'tasks' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                          Field Tasks
                         </button>
                       </div>
                     )}
                   </div>
 
-                  {/* Sites */}
-                  <button 
-                    id="tab-sites"
-                    onClick={() => handleNavigate('sites')}
-                    className={`w-full flex items-center gap-3 p-3 text-xs font-bold rounded-xl transition-all ${
-                      activeTab === 'sites' 
-                        ? 'bg-indigo-50 text-indigo-700 font-extrabold shadow-inner border-l-4 border-indigo-650 pl-2' 
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`}
-                  >
-                    <MapPin className="w-4 h-4 shrink-0" />
-                    Serviced Facility Sites
-                  </button>
+                  {/* Finance Category Tree Group (Admin only) */}
+                  {currentUser.role === 'admin' && (
+                    <div className="space-y-1 bg-slate-50/50 p-2 rounded-2xl border border-slate-150">
+                      <button 
+                        onClick={() => handleToggleHub('finance')}
+                        className="w-full flex items-center justify-between p-1.5 px-2 text-[10px] font-black uppercase text-indigo-900/80 tracking-widest cursor-pointer hover:bg-slate-100/50 rounded-xl transition-all"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Receipt className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                          Finance Hub
+                        </span>
+                        {financeHubOpen ? (
+                          <ChevronDown className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                        )}
+                      </button>
+                      
+                      {financeHubOpen && (
+                        <div className="pl-3.5 border-l border-slate-200 ml-3.5 space-y-1 mt-1">
+                          {/* Sub-item: Quotes */}
+                          <button 
+                            id="tab-quotes"
+                            onClick={() => handleNavigate('quotations')}
+                            className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
+                              activeTab === 'finance' && financeSubTab === 'quotations'
+                                ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
+                                : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'finance' && financeSubTab === 'quotations' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                            Quotes
+                          </button>
 
-                  {/* Clients */}
-                  <button 
-                    id="tab-clients"
-                    onClick={() => handleNavigate('clients')}
-                    className={`w-full flex items-center gap-3 p-3 text-xs font-bold rounded-xl transition-all ${
-                      activeTab === 'clients' 
-                        ? 'bg-indigo-50 text-indigo-700 font-extrabold shadow-inner border-l-4 border-indigo-650 pl-2' 
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`}
-                  >
-                    <Building2 className="w-4 h-4 shrink-0" />
-                    Corporate Clients
-                  </button>
+                          {/* Sub-item: Purchase Orders */}
+                          <button 
+                            id="tab-pos"
+                            onClick={() => handleNavigate('pos')}
+                            className={`w-full flex items-center gap-2.5 p-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
+                              activeTab === 'finance' && financeSubTab === 'pos'
+                                ? 'bg-indigo-600 text-white font-extrabold shadow-sm' 
+                                : 'text-slate-600 hover:bg-slate-100/60 hover:text-slate-900'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeTab === 'finance' && financeSubTab === 'pos' ? 'bg-white' : 'bg-slate-400'}`}></span>
+                            Purchase Orders
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                  {/* Projects */}
-                  <button 
-                    id="tab-projects"
-                    onClick={() => handleNavigate('projects')}
-                    className={`w-full flex items-center gap-3 p-3 text-xs font-bold rounded-xl transition-all ${
-                      activeTab === 'projects' 
-                        ? 'bg-indigo-50 text-indigo-700 font-extrabold shadow-inner border-l-4 border-indigo-650 pl-2' 
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`}
-                  >
-                    <Wrench className="w-4 h-4 shrink-0" />
-                    HVAC Service Jobs
-                  </button>
-
-                  {/* Tasks */}
-                  <button 
-                    id="tab-tasks"
-                    onClick={() => handleNavigate('tasks')}
-                    className={`w-full flex items-center gap-3 p-3 text-xs font-bold rounded-xl transition-all ${
-                      activeTab === 'tasks' 
-                        ? 'bg-indigo-50 text-indigo-700 font-extrabold shadow-inner border-l-4 border-indigo-650 pl-2' 
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`}
-                  >
-                    <ClipboardList className="w-4 h-4 shrink-0" />
-                    Field Tasks
-                  </button>
+                  {/* User Accounts Management (Admin only) */}
+                  {currentUser.role === 'admin' && (
+                    <button 
+                      id="tab-users-mgmt"
+                      onClick={() => handleNavigate('users-mgmt')}
+                      className={`w-full flex items-center gap-3 p-3 text-xs font-bold rounded-xl transition-all ${
+                        activeTab === 'users-mgmt' 
+                          ? 'bg-indigo-50 text-indigo-700 font-extrabold shadow-inner border-l-4 border-indigo-650 pl-2' 
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                      }`}
+                    >
+                      <Shield className="w-4 h-4 text-indigo-600 shrink-0" />
+                      User Accounts Mgmt
+                    </button>
+                  )}
 
                 </nav>
               </div>
@@ -735,8 +1126,40 @@ export default function App() {
                   <p className="flex justify-between"><span>📍 Facility Sites:</span> <strong className="text-slate-800">{sites.length}</strong></p>
                   <p className="flex justify-between"><span>🛠️ Service Jobs:</span> <strong className="text-slate-800">{projects.length}</strong></p>
                   <p className="flex justify-between"><span>📋 Tasks Deployed:</span> <strong className="text-slate-800">{tasks.length}</strong></p>
+                  {currentUser.role === 'admin' && (
+                    <>
+                      <p className="flex justify-between"><span>📄 Quotations:</span> <strong className="text-slate-800">{quotations.length}</strong></p>
+                      <p className="flex justify-between"><span>🛒 Purchase Orders:</span> <strong className="text-slate-800">{purchaseOrders.length}</strong></p>
+                    </>
+                  )}
                 </div>
               </div>
+            </div>
+
+            {/* User session footer card */}
+            <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-black text-slate-800 truncate block">{currentUser.name}</span>
+                  <span className={`px-1.5 py-0.5 text-[7px] font-black rounded uppercase tracking-wider ${
+                    currentUser.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-650'
+                  }`}>
+                    {currentUser.role}
+                  </span>
+                </div>
+                <span className="text-[9px] text-slate-500 font-medium font-mono truncate block leading-none mt-0.5">{currentUser.email}</span>
+              </div>
+              <button 
+                onClick={() => {
+                  localStorage.removeItem('scp_current_user');
+                  setCurrentUser(null);
+                  showToast("Logged out successfully.", "info");
+                }}
+                className="p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-650 rounded-xl transition-all cursor-pointer"
+                title="Logout"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
             </div>
 
             <div className="text-center pt-4 border-t border-slate-100">
@@ -778,7 +1201,7 @@ export default function App() {
               />
             )}
 
-            {(activeTab === 'employees' || activeTab === 'attendance' || activeTab === 'leaves' || activeTab === 'payroll') && (
+            {(activeTab === 'employees' || activeTab === 'attendance' || activeTab === 'payroll') && (
               <Employees 
                 employees={employees}
                 departments={departments}
@@ -795,6 +1218,7 @@ export default function App() {
                 leaveBalances={leaveBalances}
                 salaryStructures={salaryStructures}
                 payrolls={payrolls}
+                salaryTransfers={salaryTransfers}
                 onAddAttendance={handleAddAttendance}
                 onDeleteAttendance={handleDeleteAttendance}
                 onAddLeaveRequest={handleAddLeaveRequest}
@@ -803,8 +1227,11 @@ export default function App() {
                 onUpdateLeaveBalance={handleUpdateLeaveBalance}
                 onUpdateSalaryStructure={handleUpdateSalaryStructure}
                 onAddPayroll={handleAddPayroll}
+                onAddSalaryTransfer={handleAddSalaryTransfer}
                 onUpdatePayrollState={handleUpdatePayrollState}
                 onDeletePayroll={handleDeletePayroll}
+                onDeleteSalaryTransfer={handleDeleteSalaryTransfer}
+                onShowToast={showToast}
                 activeTab={activeTab as any}
               />
             )}
@@ -827,6 +1254,8 @@ export default function App() {
                 onAddClient={handleAddClient} 
                 sites={sites}
                 onUpdateClient={handleUpdateClient}
+                clientTypeIndustryMapping={clientTypeIndustryMapping}
+                onRefreshMappings={loadAllData}
               />
             )}
 
@@ -853,6 +1282,36 @@ export default function App() {
                 onDeleteTask={handleDeleteTask} 
                 onUpdateTaskStatus={handleUpdateTaskStatus} 
                 onUpdateTask={handleUpdateTask}
+              />
+            )}
+
+            {activeTab === 'finance' && (
+              <Finance
+                quotations={quotations}
+                purchaseOrders={purchaseOrders}
+                clients={clients}
+                projects={projects}
+                hvacCatalog={hvacCatalog}
+                vendors={vendors}
+                sites={sites}
+                onUpdateCatalogItem={handleUpdateCatalogItem}
+                onAddQuotation={handleAddQuotation}
+                onUpdateQuotation={handleUpdateQuotation}
+                onDeleteQuotation={handleDeleteQuotation}
+                onAddPurchaseOrder={handleAddPurchaseOrder}
+                onUpdatePurchaseOrder={handleUpdatePurchaseOrder}
+                onDeletePurchaseOrder={handleDeletePurchaseOrder}
+                initialSubTab={financeSubTab}
+              />
+            )}
+
+            {activeTab === 'users-mgmt' && currentUser.role === 'admin' && (
+              <UsersMgmt 
+                users={users} 
+                employees={employees}
+                onRefreshUsers={loadAllData} 
+                onShowToast={showToast} 
+                currentUser={currentUser} 
               />
             )}
 
@@ -949,6 +1408,43 @@ export default function App() {
 
         </div>
       )}
+
+      {/* Modern floating toast notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-[100] max-w-sm w-full bg-slate-900 text-white rounded-2xl shadow-2xl border border-slate-800 p-4 flex items-start gap-3.5"
+            style={{ pointerEvents: 'auto' }}
+          >
+            <div className={`p-2 rounded-xl shrink-0 ${
+              toast.type === 'success' ? 'bg-emerald-500/20 text-emerald-400' :
+              toast.type === 'error' ? 'bg-rose-500/20 text-rose-400' :
+              'bg-blue-500/20 text-blue-400'
+            }`}>
+              <Bell className="w-5 h-5 animate-bounce" />
+            </div>
+            
+            <div className="flex-1 min-w-0">
+              <h5 className="text-xs font-black uppercase tracking-wider text-slate-400">
+                System Dispatch Notification
+              </h5>
+              <p className="text-xs font-bold text-slate-100 leading-normal mt-0.5">
+                {toast.message}
+              </p>
+            </div>
+
+            <button 
+              onClick={() => setToast(null)}
+              className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

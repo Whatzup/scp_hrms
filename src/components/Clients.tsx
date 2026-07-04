@@ -12,12 +12,78 @@ interface ClientsProps {
   onAddClient: (client: Client, contacts?: ClientContact[]) => void;
   sites: Site[];
   onUpdateClient: (id: string, client: Client) => void;
+  clientTypeIndustryMapping?: any[];
+  onRefreshMappings?: () => void;
 }
 
-export default function Clients({ clients, clientContacts = [], onAddClient, sites = [], onUpdateClient }: ClientsProps) {
+import { 
+  CLIENT_INDUSTRY_MAPPING, 
+  clientTypeToIndustries, 
+  mapLegacyClientType 
+} from '../data/clientMapping';
+
+export default function Clients({ clients, clientContacts = [], onAddClient, sites = [], onUpdateClient, clientTypeIndustryMapping = [], onRefreshMappings }: ClientsProps) {
+  const dynamicMappings = clientTypeIndustryMapping.length > 0 
+    ? clientTypeIndustryMapping 
+    : CLIENT_INDUSTRY_MAPPING;
+
+  const dynamicClientTypeToIndustries: Record<string, string[]> = dynamicMappings.reduce((acc, current) => {
+    if (!acc[current.clientType]) {
+      acc[current.clientType] = [];
+    }
+    if (!acc[current.clientType].includes(current.industry)) {
+      acc[current.clientType].push(current.industry);
+    }
+    return acc;
+  }, {} as Record<string, string[]>);
+
+  const [newMapType, setNewMapType] = useState('');
+  const [newMapIndustry, setNewMapIndustry] = useState('');
+  const [addingMap, setAddingMap] = useState(false);
+
+  const handleAddMapping = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMapType.trim() || !newMapIndustry.trim()) return;
+    try {
+      setAddingMap(true);
+      const response = await fetch('/api/client-mappings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientType: newMapType.trim(),
+          industry: newMapIndustry.trim()
+        })
+      });
+      if (response.ok) {
+        onRefreshMappings?.();
+        setNewMapType('');
+        setNewMapIndustry('');
+      }
+    } catch (err) {
+      console.error("Failed to add mapping:", err);
+    } finally {
+      setAddingMap(false);
+    }
+  };
+
+  const handleDeleteMapping = async (id: string) => {
+    try {
+      const response = await fetch(`/api/client-mappings/${id}`, {
+        method: 'DELETE'
+      });
+      if (response.ok) {
+        onRefreshMappings?.();
+      }
+    } catch (err) {
+      console.error("Failed to delete mapping:", err);
+    }
+  };
+
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [showMappingModal, setShowMappingModal] = useState(false);
+  const [mappingSearch, setMappingSearch] = useState('');
 
   // Edit states
   const [isEditing, setIsEditing] = useState(false);
@@ -39,8 +105,9 @@ export default function Clients({ clients, clientContacts = [], onAddClient, sit
 
   const startEditing = (client: Client) => {
     setEditName(client.client_name || '');
-    setEditType(client.client_type || 'Corporate');
-    setEditIndustry(client.industry || '');
+    const mappedType = mapLegacyClientType(client.client_type);
+    setEditType(mappedType);
+    setEditIndustry(client.industry || (dynamicClientTypeToIndustries[mappedType]?.[0] || ''));
     setEditGst(client.gst_number || '');
     setEditWebsite(client.website || '');
     setEditAddress(client.head_office_address || '');
@@ -62,8 +129,8 @@ export default function Clients({ clients, clientContacts = [], onAddClient, sit
 
   // Client Form states
   const [clientName, setClientName] = useState('');
-  const [clientType, setClientType] = useState('Corporate');
-  const [industry, setIndustry] = useState('');
+  const [clientType, setClientType] = useState('Business');
+  const [industry, setIndustry] = useState('Commercial');
   const [gstNumber, setGstNumber] = useState('');
   const [website, setWebsite] = useState('');
   const [headOfficeAddress, setHeadOfficeAddress] = useState('');
@@ -328,28 +395,34 @@ export default function Clients({ clients, clientContacts = [], onAddClient, sit
                 </div>
 
                 <div className="space-y-1">
-                  <label className="font-extrabold uppercase text-gray-400">Client Category</label>
+                  <label className="font-extrabold uppercase text-gray-400">Client Type</label>
                   <select 
                     value={editType}
-                    onChange={e => setEditType(e.target.value)}
-                    className="w-full text-xs p-3 border border-gray-250 rounded-xl bg-white"
+                    onChange={e => {
+                      const newType = e.target.value;
+                      setEditType(newType);
+                      const matchedIndustries = dynamicClientTypeToIndustries[newType] || [];
+                      setEditIndustry(matchedIndustries[0] || 'Other');
+                    }}
+                    className="w-full text-xs p-3 border border-gray-250 rounded-xl bg-white focus:outline-indigo-500 font-semibold"
                   >
-                    <option value="Corporate">Corporate</option>
-                    <option value="Retail">Retail</option>
-                    <option value="PSU">PSU / Government</option>
-                    <option value="SME">SME / Private</option>
+                    {Object.keys(dynamicClientTypeToIndustries).map(type => (
+                      <option key={type} value={type}>{type}</option>
+                    ))}
                   </select>
                 </div>
 
                 <div className="space-y-1">
-                  <label className="font-extrabold uppercase text-gray-400">Industry / Domain</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Healthcare, IT Park, Retail Chain"
+                  <label className="font-extrabold uppercase text-gray-400">Industry</label>
+                  <select 
                     value={editIndustry}
                     onChange={e => setEditIndustry(e.target.value)}
-                    className="w-full text-xs p-3 border border-gray-250 rounded-xl bg-white"
-                  />
+                    className="w-full text-xs p-3 border border-gray-250 rounded-xl bg-white focus:outline-indigo-500 font-semibold"
+                  >
+                    {(dynamicClientTypeToIndustries[editType] || ['Other']).map(ind => (
+                      <option key={ind} value={ind}>{ind}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="space-y-1">
@@ -802,30 +875,32 @@ export default function Clients({ clients, clientContacts = [], onAddClient, sit
                 <label className="font-extrabold uppercase text-gray-450">Client Type</label>
                 <select 
                   value={clientType}
-                  onChange={e => setClientType(e.target.value)}
-                  className="w-full text-sm p-3 bg-white border border-gray-200 rounded-xl outline-hidden focus:ring-1 focus:ring-indigo-500"
+                  onChange={e => {
+                    const newType = e.target.value;
+                    setClientType(newType);
+                    const matchedIndustries = dynamicClientTypeToIndustries[newType] || [];
+                    setIndustry(matchedIndustries[0] || 'Other');
+                  }}
+                  className="w-full text-sm p-3 bg-white border border-gray-200 rounded-xl outline-hidden focus:ring-1 focus:ring-indigo-500 font-semibold"
                 >
-                  <option value="Corporate">Corporate / Enterprise</option>
-                  <option value="Retail Client">Retail Customer</option>
-                  <option value="Government">Government / Public Sector</option>
-                  <option value="Residential">Residential Association</option>
-                  <option value="Industrial">Manufacturing / Industrial</option>
-                  <option value="Hospitality">Hotel / Resort</option>
-                  <option value="Healthcare">Hospital / Healthcare</option>
-                  <option value="Other">Other Category</option>
+                  {Object.keys(dynamicClientTypeToIndustries).map(type => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
                 </select>
               </div>
 
               {/* Industry */}
               <div className="space-y-1">
                 <label className="font-extrabold uppercase text-gray-450">Industry</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g. Retail, Aerospace, Pharma" 
+                <select 
                   value={industry}
                   onChange={e => setIndustry(e.target.value)}
-                  className="w-full text-sm p-3 border border-gray-200 rounded-xl outline-hidden focus:ring-1 focus:ring-indigo-500"
-                />
+                  className="w-full text-sm p-3 bg-white border border-gray-200 rounded-xl outline-hidden focus:ring-1 focus:ring-indigo-500 font-semibold"
+                >
+                  {(dynamicClientTypeToIndustries[clientType] || ['Other']).map(ind => (
+                    <option key={ind} value={ind}>{ind}</option>
+                  ))}
+                </select>
               </div>
 
               {/* GST Number */}
@@ -1134,15 +1209,17 @@ export default function Clients({ clients, clientContacts = [], onAddClient, sit
               <h2 className="text-xl font-bold text-gray-950">Clients Registered Records</h2>
               <p className="text-xs text-gray-500">Track company designations, GST codes, and full personnel client contacts</p>
             </div>
-            <button 
-              id="show-add-client-btn"
-              onClick={() => {
-                setShowAddForm(true);
-              }}
-              className="flex items-center gap-1.5 px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-705 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
-            >
-              <Plus className="w-4 h-4" /> Add New Client
-            </button>
+            <div className="flex items-center gap-2">
+              <button 
+                id="show-add-client-btn"
+                onClick={() => {
+                  setShowAddForm(true);
+                }}
+                className="flex items-center gap-1.5 px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-705 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+              >
+                <Plus className="w-4 h-4" /> Add New Client
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 p-3 bg-white rounded-xl border border-gray-100 shadow-xs">
@@ -1225,6 +1302,114 @@ export default function Clients({ clients, clientContacts = [], onAddClient, sit
                 No corporate clientele cards matched search terms. Click "Add New Client" to append a record.
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Client Type & Industry Mapping Reference Modal */}
+      {showMappingModal && (
+        <div className="fixed inset-0 bg-slate-950/45 backdrop-blur-xs flex items-center justify-center z-[100] p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden animate-scale-up">
+            <div className="bg-slate-900 p-5 text-white flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-bold flex items-center gap-2 text-white">
+                  <Shield className="w-5 h-5 text-indigo-400" />
+                  Client Type &amp; Industry Reference Mapping
+                </h3>
+                <p className="text-xs text-slate-300">Valid combinations automatically enforced during client onboarding and updates</p>
+              </div>
+              <button 
+                onClick={() => setShowMappingModal(false)}
+                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-4 bg-indigo-50/55 border-b border-indigo-100/60 flex items-center gap-3">
+              <Search className="w-4 h-4 text-indigo-500 shrink-0" />
+              <input 
+                type="text"
+                placeholder="Search mapping table by client type or industry..."
+                value={mappingSearch}
+                onChange={e => setMappingSearch(e.target.value)}
+                className="w-full text-xs font-semibold bg-transparent focus:outline-none text-slate-800"
+              />
+            </div>
+
+            {/* Live creation form for custom mappings */}
+            <form onSubmit={handleAddMapping} className="p-4 bg-slate-50 border-b border-slate-150 flex gap-2 items-center">
+              <input 
+                type="text"
+                placeholder="Client Type (e.g. Enterprise)"
+                value={newMapType}
+                onChange={e => setNewMapType(e.target.value)}
+                className="flex-1 p-2 bg-white text-xs font-semibold border border-slate-200 rounded-lg focus:outline-indigo-500"
+                required
+              />
+              <input 
+                type="text"
+                placeholder="Industry (e.g. Energy)"
+                value={newMapIndustry}
+                onChange={e => setNewMapIndustry(e.target.value)}
+                className="flex-1 p-2 bg-white text-xs font-semibold border border-slate-200 rounded-lg focus:outline-indigo-500"
+                required
+              />
+              <button
+                type="submit"
+                disabled={addingMap}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold rounded-lg cursor-pointer transition-colors shrink-0 text-xs"
+              >
+                {addingMap ? 'Adding...' : 'Add Rule'}
+              </button>
+            </form>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              <table className="w-full text-left text-xs border-collapse font-sans">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-2.5 px-3">Client Type</th>
+                    <th className="py-2.5 px-3">Enforced Industry Mapping</th>
+                    <th className="py-2.5 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dynamicMappings.filter(item => 
+                    item.clientType.toLowerCase().includes(mappingSearch.toLowerCase()) ||
+                    item.industry.toLowerCase().includes(mappingSearch.toLowerCase())
+                  ).map((item, index) => (
+                    <tr key={item.id || index} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="py-2 px-3 font-semibold text-slate-900">{item.clientType}</td>
+                      <td className="py-2 px-3">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md font-mono text-[10.5px] bg-indigo-50 text-indigo-700 border border-indigo-100/40">
+                          {item.industry}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        <button 
+                          type="button"
+                          onClick={() => handleDeleteMapping(item.id)}
+                          title="Delete mapping rule"
+                          className="p-1 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            <div className="p-4 bg-slate-50 border-t border-slate-100 text-[10.5px] text-slate-500 font-medium flex justify-between items-center">
+              <span>Total Rules: {dynamicMappings.length} mappings</span>
+              <button 
+                onClick={() => setShowMappingModal(false)}
+                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg cursor-pointer"
+              >
+                Close Reference Table
+              </button>
+            </div>
           </div>
         </div>
       )}

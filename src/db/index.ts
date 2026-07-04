@@ -6,33 +6,26 @@ const { Pool } = pg;
 
 // Helper to parse connection string into Postgres Connection Object options
 function getDatabaseConfig() {
-  const url = process.env.DATABASE_URL || '';
+  const url = process.env.NEON_DATABASE_URL || 
+              process.env.DATABASE_URL || 
+              process.env.POSTGRES_URL || 
+              process.env.POSTGRES_PRISMA_URL || 
+              '';
   
   if (url) {
-    try {
-      // postgresql://[user]:[password]@[host]:[port]/[database]
-      const match = url.match(/postgres(?:ql)?:\/\/([^:]+):([^@]+)@([^:/]+)(?::(\d+))?\/([^?]+)/);
-      if (match) {
-        const [, user, password, host, port, database] = match;
-        const config: pg.PoolConfig = {
-          host,
-          user: decodeURIComponent(user),
-          password: decodeURIComponent(password),
-          database,
-          port: port ? parseInt(port, 10) : 5432,
-          connectionTimeoutMillis: 15000,
-        };
-        
-        // Neon connections typically require SSL
-        if (url.includes('neon.tech') || url.includes('sslmode=require')) {
-          config.ssl = { rejectUnauthorized: false };
-        }
-        
-        return config;
-      }
-    } catch (e) {
-      console.error('Failed to parse database connection URL:', e);
+    const config: pg.PoolConfig = {
+      connectionString: url,
+      connectionTimeoutMillis: 15000,
+      idleTimeoutMillis: 15000,
+      max: process.env.VERCEL ? 1 : 10,
+    };
+    
+    // Neon connections typically require SSL
+    if (url.includes('neon.tech') || url.includes('sslmode=require')) {
+      config.ssl = { rejectUnauthorized: false };
     }
+    
+    return config;
   }
 
   // Fallback to standard environment variable objects
@@ -49,6 +42,8 @@ function getDatabaseConfig() {
     database,
     port,
     connectionTimeoutMillis: 15000,
+    idleTimeoutMillis: 15000,
+    max: process.env.VERCEL ? 1 : 10,
   };
 
   if (host.includes('neon.tech')) {

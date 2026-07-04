@@ -187,7 +187,7 @@ export default function Tasks({
                   className="w-full text-sm p-3 border border-gray-200 rounded-xl outline-hidden bg-white"
                 >
                   <option value="">-- Unassigned (Dispatch ledger) --</option>
-                  {employees.map(emp => (
+                  {employees.filter(emp => emp.status === 'ACTIVE').map(emp => (
                     <option key={emp.id} value={emp.id}>{emp.name} ({emp.title})</option>
                   ))}
                 </select>

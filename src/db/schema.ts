@@ -212,3 +212,66 @@ export const tasks = pgTable('tasks', {
   weatherCondition: text('weather_condition'),
   safetyEquipmentChecked: text('safety_equipment_checked'),
 });
+
+export const hvacCatalog = pgTable('hvac_catalog', {
+  fcu: text('fcu').primaryKey(),
+  description: text('description').notNull(),
+  isFavorite: integer('is_favorite').default(0), // 0 = false, 1 = true
+
+  // CSV exact columns
+  series: text('series'),
+  type: text('type'),
+  technology: text('technology'),
+  mode: text('mode'),
+  starRating: text('star_rating'),
+  refrigerant: text('refrigerant'),
+  powerSupply: text('power_supply'),
+  coolingTr: text('cooling_tr'),
+  heatingTr: text('heating_tr'),
+  cu: text('cu'),
+  mrpSetBase: text('mrp_set_base'),
+  dbpWithoutTax: text('dbp_without_tax'),
+  discount: text('discount'),
+  unitPriceWoTax: text('unit_price_wo_tax'),
+  nlcGstPaid: text('nlc_gst_paid'),
+});
+
+export const vendors = pgTable('vendors', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  address: text('address'),
+  gst: text('gst'),
+  contactPerson: text('contact_person'),
+  phone: text('phone'),
+  email: text('email'),
+});
+
+export const clientTypeIndustryMapping = pgTable('client_type_industry_mapping', {
+  id: text('id').primaryKey(),
+  clientType: text('client_type').notNull(),
+  industry: text('industry').notNull(),
+});
+
+export const users = pgTable('users', {
+  id: text('id').primaryKey(),
+  email: text('email').notNull().unique(),
+  password: text('password').notNull(),
+  role: text('role').notNull(), // 'admin' or 'user'
+  name: text('name').notNull(),
+  phone: text('phone'),
+  status: text('status'),
+  employeeId: text('employee_id').references(() => employees.id, { onDelete: 'cascade' }),
+});
+
+export const loginLogs = pgTable('login_logs', {
+  id: text('id').primaryKey(),
+  userId: text('user_id'),
+  email: text('email'),
+  action: text('action'), // 'LOGIN_SUCCESS', 'LOGIN_FAILURE', 'SIGNUP'
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  timestamp: text('timestamp'),
+});
+
+
+

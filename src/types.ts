@@ -286,3 +286,137 @@ export interface Payroll {
   payment_date?: string;
   payment_status: 'Pending' | 'Processed' | 'Paid';
 }
+
+export interface SalaryTransferLog {
+  id: string;
+  payroll_id: string | null;
+  employee_id: string;
+  amount: number;
+  transfer_date: string;
+  payroll_month: string;
+  reference_number: string;
+  payment_method: string;
+}
+
+export interface QuotationLineItem {
+  description: string;
+  unit: string;
+  unit_price: number;
+  quantity: number;
+  total: number;
+}
+
+export interface Quotation {
+  id: string;
+  quotation_number: string;
+  client_id?: string;
+  client_name?: string;
+  project_id?: string;
+  project_name?: string;
+  quotation_date: string;
+  valid_until: string;
+  status: 'Draft' | 'Sent' | 'Approved' | 'Rejected';
+  subtotal: number;
+  tax_rate: number;
+  tax_amount: number;
+  discount_amount: number;
+  shipping_amount?: number;
+  grand_total: number;
+  terms_conditions?: string;
+  notes?: string;
+  items: QuotationLineItem[];
+}
+
+export interface PurchaseOrderLineItem {
+  description: string;
+  unit?: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  po_number: string;
+  vendor_name: string;
+  vendor_address?: string;
+  vendor_gst?: string;
+  client_id?: string;
+  client_name?: string;
+  project_id?: string;
+  project_name?: string;
+  po_date: string;
+  delivery_date?: string;
+  status: 'Draft' | 'Sent' | 'Approved' | 'Received' | 'Closed';
+  subtotal: number;
+  tax_rate: number;
+  tax_amount: number;
+  shipping_handling?: number;
+  grand_total: number;
+  payment_terms?: string;
+  notes?: string;
+  items: PurchaseOrderLineItem[];
+  delivery_address?: string;
+  vendor_contact_person?: string;
+  quotation_id?: string;
+  quotation_number?: string;
+}
+
+export interface CatalogItem {
+  sku: string;
+  name: string;
+  department: string;
+  category: string;
+  unit: string;
+  price: number;
+  description: string;
+  isFavorite?: boolean;
+
+  // Exact CSV Columns representation
+  series?: string;
+  type?: string;
+  technology?: string;
+  mode?: string;
+  starRating?: string;
+  refrigerant?: string;
+  powerSupply?: string;
+  coolingTr?: string;
+  heatingTr?: string;
+  fcu?: string;
+  cu?: string;
+  mrpSetBase?: string;
+  dbpWithoutTax?: string;
+  discount?: string;
+  unitPriceWoTax?: string;
+  nlcGstPaid?: string;
+}
+
+export interface Vendor {
+  id: string;
+  name: string;
+  address?: string;
+  gst?: string;
+  contact_person?: string;
+  phone?: string;
+  email?: string;
+}
+
+export interface ClientTypeIndustryMapping {
+  id: string;
+  clientType: string;
+  industry: string;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  password?: string;
+  role: 'admin' | 'user';
+  name: string;
+  phone?: string;
+  status?: string;
+  employeeId?: string;
+}
+
+
+

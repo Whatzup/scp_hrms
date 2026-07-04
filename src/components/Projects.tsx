@@ -764,7 +764,7 @@ export default function Projects({
                       className="w-full text-sm p-3 border border-gray-200 rounded-xl bg-white"
                     >
                       <option value="">-- No PM Assigned --</option>
-                      {employees.map(emp => (
+                      {employees.filter(emp => emp.status === 'ACTIVE').map(emp => (
                         <option key={emp.id} value={emp.id}>{emp.name} ({emp.job_title})</option>
                       ))}
                     </select>
@@ -778,7 +778,7 @@ export default function Projects({
                       className="w-full text-sm p-3 border border-gray-200 rounded-xl bg-white"
                     >
                       <option value="">-- No Site Engineer Assigned --</option>
-                      {employees.map(emp => (
+                      {employees.filter(emp => emp.status === 'ACTIVE').map(emp => (
                         <option key={emp.id} value={emp.id}>{emp.name} ({emp.job_title})</option>
                       ))}
                     </select>
@@ -795,7 +795,7 @@ export default function Projects({
                       className="w-full text-sm p-3 border border-gray-200 rounded-xl bg-white"
                     >
                       <option value="">-- Same as Supervisor in Charge --</option>
-                      {employees.map(emp => (
+                      {employees.filter(emp => emp.status === 'ACTIVE').map(emp => (
                         <option key={emp.id} value={emp.id}>{emp.name}</option>
                       ))}
                     </select>
@@ -1331,10 +1331,10 @@ export default function Projects({
                               <select 
                                 value={editProjectManagerId}
                                 onChange={e => setEditProjectManagerId(e.target.value)}
-                                className="w-full text-xs p-2.5 border border-gray-250 rounded-xl bg-white focus:outline-indigo-500"
+                                className="w-full text-xs p-2.5 border border-gray-255 rounded-xl bg-white focus:outline-indigo-500"
                               >
                                 <option value="">-- Let any assigned Manager lead --</option>
-                                {employees.map(emp => (
+                                {employees.filter(emp => emp.status === 'ACTIVE').map(emp => (
                                   <option key={emp.id} value={emp.id}>{emp.name} ({emp.title})</option>
                                 ))}
                               </select>
@@ -1345,10 +1345,10 @@ export default function Projects({
                               <select 
                                 value={editSiteEngineerId}
                                 onChange={e => setEditSiteEngineerId(e.target.value)}
-                                className="w-full text-xs p-2.5 border border-gray-250 rounded-xl bg-white focus:outline-indigo-500"
+                                className="w-full text-xs p-2.5 border border-gray-255 rounded-xl bg-white focus:outline-indigo-500"
                               >
                                 <option value="">-- Let any HVAC Engineer lead --</option>
-                                {employees.map(emp => (
+                                {employees.filter(emp => emp.status === 'ACTIVE').map(emp => (
                                   <option key={emp.id} value={emp.id}>{emp.name} ({emp.title})</option>
                                 ))}
                               </select>
@@ -1359,10 +1359,10 @@ export default function Projects({
                               <select 
                                 value={editSupervisorId}
                                 onChange={e => setEditSupervisorId(e.target.value)}
-                                className="w-full text-xs p-2.5 border border-gray-250 rounded-xl bg-white focus:outline-indigo-500"
+                                className="w-full text-xs p-2.5 border border-gray-255 rounded-xl bg-white focus:outline-indigo-500"
                               >
                                 <option value="">-- Let any Supervisor lead --</option>
-                                {employees.map(emp => (
+                                {employees.filter(emp => emp.status === 'ACTIVE').map(emp => (
                                   <option key={emp.id} value={emp.id}>{emp.name} ({emp.title})</option>
                                 ))}
                               </select>

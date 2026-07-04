@@ -1,11 +1,11 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
 import { db, pool } from "./src/db/index.ts";
 import { sql } from "drizzle-orm";
-import { departments, employees, employeeSkills, clients, clientContacts, sites, projects, tasks } from "./src/db/schema.ts";
+import { departments, employees, employeeSkills, clients, clientContacts, sites, projects, tasks, hvacCatalog, vendors, clientTypeIndustryMapping } from "./src/db/schema.ts";
 import { eq } from "drizzle-orm";
+import { CLIENT_INDUSTRY_MAPPING } from "./src/data/clientMapping.ts";
 
 // Mock data to seed if DB is empty
 import { 
@@ -15,7 +15,8 @@ import {
   mockClients, 
   mockSites, 
   mockProjects, 
-  mockTasks 
+  mockTasks,
+  mockHvacCatalog
 } from "./src/mockData.ts";
 
 const app = express();
@@ -25,6 +26,29 @@ app.use(express.json());
 
 // Initialize DB schema and seed with custom data if empty
 let dbConnected = false;
+
+// Robust fallback in-memory users list if database is offline or not configured
+const inMemoryUsers: any[] = [
+  {
+    id: "u-admin",
+    email: "aijaz523@gmail.com",
+    password: "admin123",
+    role: "admin",
+    name: "Aijaz (Admin)",
+    phone: "+91-9999999999",
+    status: "ACTIVE"
+  },
+  {
+    id: "u-tech",
+    email: "tech@supercool.com",
+    password: "user123",
+    role: "user",
+    name: "Field Technician",
+    phone: "+91-8888888888",
+    status: "ACTIVE"
+  }
+];
+
 async function initDb() {
   if (!process.env.DATABASE_URL) {
     console.warn("⚠️ DATABASE_URL is not configured. Database features will be unavailable.");
@@ -362,74 +386,421 @@ async function initDb() {
       );
     `);
 
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS salary_transfer_logs (
+        id TEXT PRIMARY KEY,
+        payroll_id TEXT REFERENCES payroll(id) ON DELETE CASCADE,
+        employee_id TEXT REFERENCES employees(id) ON DELETE CASCADE,
+        amount INTEGER,
+        transfer_date TEXT,
+        payroll_month TEXT,
+        reference_number TEXT,
+        payment_method TEXT
+      );
+    `);
+
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS quotations (
+        id TEXT PRIMARY KEY,
+        quotation_number TEXT NOT NULL,
+        client_id TEXT,
+        client_name TEXT,
+        project_id TEXT,
+        project_name TEXT,
+        quotation_date TEXT,
+        valid_until TEXT,
+        status TEXT,
+        subtotal REAL,
+        tax_rate REAL,
+        tax_amount REAL,
+        discount_amount REAL,
+        grand_total REAL,
+        terms_conditions TEXT,
+        notes TEXT,
+        items TEXT
+      );
+    `);
+
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS purchase_orders (
+        id TEXT PRIMARY KEY,
+        po_number TEXT NOT NULL,
+        vendor_name TEXT NOT NULL,
+        vendor_address TEXT,
+        vendor_gst TEXT,
+        client_id TEXT,
+        client_name TEXT,
+        project_id TEXT,
+        project_name TEXT,
+        po_date TEXT,
+        delivery_date TEXT,
+        status TEXT,
+        subtotal REAL,
+        tax_rate REAL,
+        tax_amount REAL,
+        shipping_handling REAL,
+        grand_total REAL,
+        payment_terms TEXT,
+        notes TEXT,
+        items TEXT,
+        delivery_address TEXT,
+        vendor_contact_person TEXT,
+        quotation_id TEXT,
+        quotation_number TEXT
+      );
+    `);
+
+    // Ensure columns exist on already created tables
+    await db.execute(sql`
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delivery_address TEXT;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_contact_person TEXT;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS quotation_id TEXT;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS quotation_number TEXT;
+    `);
+
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS vendors (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        address TEXT,
+        gst TEXT,
+        contact_person TEXT,
+        phone TEXT,
+        email TEXT
+      );
+    `);
+
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS client_type_industry_mapping (
+        id TEXT PRIMARY KEY,
+        client_type TEXT NOT NULL,
+        industry TEXT NOT NULL
+      );
+    `);
+
+    await db.execute(sql`
+      DROP TABLE IF EXISTS users CASCADE;
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL,
+        name TEXT NOT NULL,
+        phone TEXT,
+        status TEXT,
+        employee_id TEXT REFERENCES employees(id) ON DELETE CASCADE
+      );
+    `);
+
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS login_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        email TEXT,
+        action TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        timestamp TEXT
+      );
+    `);
+
+    await db.execute(sql`
+      DROP TABLE IF EXISTS hvac_catalog CASCADE;
+      CREATE TABLE hvac_catalog (
+        fcu TEXT PRIMARY KEY,
+        description TEXT NOT NULL,
+        is_favorite INTEGER DEFAULT 0,
+        series TEXT,
+        type TEXT,
+        technology TEXT,
+        mode TEXT,
+        star_rating TEXT,
+        refrigerant TEXT,
+        power_supply TEXT,
+        cooling_tr TEXT,
+        heating_tr TEXT,
+        cu TEXT,
+        mrp_set_base TEXT,
+        dbp_without_tax TEXT,
+        discount TEXT,
+        unit_price_wo_tax TEXT,
+        nlc_gst_paid TEXT
+      );
+    `);
+
     console.log("✅ PostgreSQL Tables successfully checked & synced.");
 
-    // Check if empty, and seed
+    // Permanently remove SPC002, SPC003, SPC004, SPC005, SPC006 and associated data if they exist
+    const targetCodes = ['SPC002', 'SPC003', 'SPC004', 'SPC005', 'SPC006'];
+    for (const code of targetCodes) {
+      try {
+        const res = await db.execute(sql`SELECT id FROM employees WHERE employee_code = ${code}`);
+        if (res.rows && res.rows.length > 0) {
+          const empId = String(res.rows[0].id);
+          console.log(`Permanently deleting employee ${code} (ID: ${empId}) and associated rows...`);
+          // Clear foreign key references in tasks and projects to allow safe deletion
+          await db.execute(sql`UPDATE tasks SET assignee_id = NULL WHERE assignee_id = ${empId}`);
+          await db.execute(sql`UPDATE projects SET project_manager_id = NULL WHERE project_manager_id = ${empId}`);
+          await db.execute(sql`UPDATE projects SET site_engineer_id = NULL WHERE site_engineer_id = ${empId}`);
+          await db.execute(sql`UPDATE projects SET supervisor_id = NULL WHERE supervisor_id = ${empId}`);
+          
+          // Delete referencing records
+          await db.execute(sql`DELETE FROM employee_skills WHERE employee_id = ${empId}`);
+          await db.execute(sql`DELETE FROM attendance WHERE employee_id = ${empId}`);
+          await db.execute(sql`DELETE FROM leave_requests WHERE employee_id = ${empId}`);
+          await db.execute(sql`DELETE FROM leave_balances WHERE employee_id = ${empId}`);
+          await db.execute(sql`DELETE FROM salary_structures WHERE employee_id = ${empId}`);
+          await db.execute(sql`DELETE FROM payroll WHERE employee_id = ${empId}`);
+          await db.execute(sql`DELETE FROM salary_transfer_logs WHERE employee_id = ${empId}`);
+          
+          // Delete the employee record itself
+          await db.execute(sql`DELETE FROM employees WHERE id = ${empId}`);
+        }
+      } catch (delErr: any) {
+        console.warn(`Could not delete employee with code ${code}:`, delErr.message);
+      }
+    }
+
+    // Seed default users (Admin and a regular user)
+    try {
+      const adminCheck = await db.execute(sql`SELECT id FROM users WHERE email = 'aijaz523@gmail.com'`);
+      if (!adminCheck.rows || adminCheck.rows.length === 0) {
+        console.log("Seeding default admin user (aijaz523@gmail.com)...");
+        await db.execute(sql`
+          INSERT INTO users (id, email, password, role, name, phone, status)
+          VALUES ('u-admin', 'aijaz523@gmail.com', 'admin123', 'admin', 'Aijaz (Admin)', '+91-9999999999', 'ACTIVE')
+        `);
+      }
+
+      const userCheck = await db.execute(sql`SELECT id FROM users WHERE email = 'tech@supercool.com'`);
+      if (!userCheck.rows || userCheck.rows.length === 0) {
+        console.log("Seeding default standard user (tech@supercool.com)...");
+        await db.execute(sql`
+          INSERT INTO users (id, email, password, role, name, phone, status)
+          VALUES ('u-tech', 'tech@supercool.com', 'user123', 'user', 'Field Technician', '+91-8888888888', 'ACTIVE')
+        `);
+      }
+    } catch (userSeedErr: any) {
+      console.warn("Could not seed default users:", userSeedErr.message);
+    }
+
+    // Always synchronize departments, employees, and skills (using onConflictDoNothing)
+    console.log("🌱 Syncing departments, employees, and skills...");
+    
+    // Load departments
+    for (const d of mockDepartments) {
+      await db.insert(departments).values(d).onConflictDoNothing();
+    }
+
+    // Load vendors
+    const initialVendors = [
+      {
+        id: "v-daikin",
+        name: "M/S DAIKIN AIRCONDITIONING INDIA PVT LTD",
+        address: "12th Floor, Building No. 9, Tower A, DLF Cyber City, Phase III, Gurgaon, Haryana 122002",
+        gst: "06AADCD1234F1Z9",
+        contactPerson: "MR ANKIT SHARMA",
+        phone: "+91-9876543210",
+        email: "sales.delhi@daikinindia.com"
+      },
+      {
+        id: "v-voltas",
+        name: "M/S VOLTAS LIMITED",
+        address: "A-43, NH-19 BLOCK B, MOHAN COOPERATIVE BADARPUR DELHI 110044",
+        gst: "07AAAAA1111A1Z1",
+        contactPerson: "MR SIDDHARTH",
+        phone: "+91-9988776655",
+        email: "siddharth.delhi@voltas.com"
+      }
+    ];
+    for (const v of initialVendors) {
+      await db.insert(vendors).values(v).onConflictDoNothing();
+    }
+
+    // Load employees
+    for (const e of mockEmployees) {
+      await db.insert(employees).values({
+        id: e.id,
+        employeeCode: e.employee_code,
+        aadharNumber: e.aadhar_number || null,
+        firstName: e.first_name || null,
+        lastName: e.last_name || null,
+        name: e.name,
+        dateOfBirth: e.date_of_birth || null,
+        gender: e.gender || null,
+        email: e.email || null,
+        phone: e.phone || null,
+        address: e.address || null,
+        city: e.city || null,
+        state: e.state || null,
+        postalCode: e.postal_code || null,
+        hireDate: e.hire_date || null,
+        employmentStatus: e.employment_status || null,
+        departmentId: e.department_id || null,
+        departmentName: e.department_name || null,
+        managerId: e.manager_id || null,
+        jobTitle: e.job_title || null,
+        title: e.title || null,
+        department: e.department || null,
+        dailyWage: e.daily_wage || null,
+        dailyIncentiveEarned: e.daily_incentive_earned || null,
+        hourlyRate: e.hourly_rate || null,
+        salary: e.salary || null,
+        profilePhoto: e.profile_photo || null,
+        serviceArea: e.service_area || '',
+        skills: e.skills || null,
+        certifications: e.certifications || null,
+        availability: e.availability || 'AVAILABLE',
+        status: e.status || 'ACTIVE',
+        plateNumber: e.plate_number || null,
+        make: e.make || null,
+        model: e.model || null,
+        year: e.year || null,
+      }).onConflictDoNothing();
+    }
+
+    // Auto-create user accounts for all employees
+    console.log("👤 Creating user accounts for all employees with password 'user123'...");
+    let allEmpsToUserSync: any[] = [...mockEmployees];
+    try {
+      const dbEmps = await db.execute(sql`SELECT * FROM employees`);
+      if (dbEmps.rows && dbEmps.rows.length > 0) {
+        allEmpsToUserSync = dbEmps.rows.map((row: any) => ({
+          id: row.id,
+          employee_code: row.employee_code || row.employeeCode,
+          email: row.email,
+          name: row.name,
+          phone: row.phone
+        }));
+      }
+    } catch (e: any) {
+      console.warn("Could not retrieve existing employees for user sync, using mock list:", e.message);
+    }
+
+    for (const e of allEmpsToUserSync) {
+      const email = (e.email && e.email.trim()) 
+        ? e.email.trim().toLowerCase() 
+        : `${(e.employee_code || e.id).toLowerCase()}@supercool.com`;
+      const userId = `u-emp-${e.id}`;
+      const name = e.name;
+      const phone = e.phone || null;
+      
+      const exists = inMemoryUsers.some(u => u.email.toLowerCase() === email);
+      if (!exists) {
+        const newUser = {
+          id: userId,
+          email,
+          password: "user123",
+          role: "user",
+          name,
+          phone,
+          status: "ACTIVE",
+          employeeId: e.id
+        };
+        inMemoryUsers.push(newUser);
+      }
+
+      // Insert into database since we are in initDb
+      try {
+        const check = await db.execute(sql`SELECT id FROM users WHERE LOWER(email) = ${email}`);
+        if (!check.rows || check.rows.length === 0) {
+          await db.execute(sql`
+            INSERT INTO users (id, email, password, role, name, phone, status, employee_id)
+            VALUES (${userId}, ${email}, 'user123', 'user', ${name}, ${phone}, 'ACTIVE', ${e.id})
+          `);
+        } else {
+          // update employee_id on existing users if not set
+          await db.execute(sql`
+            UPDATE users SET employee_id = ${e.id} WHERE LOWER(email) = ${email} AND employee_id IS NULL
+          `);
+        }
+      } catch (dbErr: any) {
+        console.warn(`Failed to auto-create user for employee ${e.name}:`, dbErr.message);
+      }
+    }
+
+    // Load skills
+    for (const s of mockEmployeeSkills) {
+      await db.insert(employeeSkills).values({
+        id: s.id,
+        employeeId: s.employee_id,
+        skillName: s.skill_name,
+        skillLevel: s.skill_level || null,
+        certificateNumber: s.certificate_number || null,
+        issuingAuthority: s.issuing_authority || null,
+        issueDate: s.issue_date || null,
+      }).onConflictDoNothing();
+    }
+
+    // Load HVAC Catalog
+    console.log("🌱 Syncing HVAC Catalog items...");
+    try {
+      await db.execute(sql`DELETE FROM hvac_catalog`);
+      console.log("Cleared old hvac_catalog items successfully.");
+    } catch (clearErr) {
+      console.warn("Could not clear hvac_catalog (it may be empty or not created yet):", clearErr);
+    }
+    for (const item of mockHvacCatalog) {
+      await db.insert(hvacCatalog).values({
+        fcu: item.fcu || item.sku || "",
+        description: item.description,
+        isFavorite: item.isFavorite ? 1 : 0,
+        series: item.series || "",
+        type: item.type || "",
+        technology: item.technology || "",
+        mode: item.mode || "",
+        starRating: item.starRating || "",
+        refrigerant: item.refrigerant || "",
+        powerSupply: item.powerSupply || "",
+        coolingTr: item.coolingTr || "",
+        heatingTr: item.heatingTr || "",
+        cu: item.cu || "",
+        mrpSetBase: item.mrpSetBase || "0",
+        dbpWithoutTax: item.dbpWithoutTax || "0",
+        discount: item.discount || "",
+        unitPriceWoTax: item.unitPriceWoTax || "0",
+        nlcGstPaid: item.nlcGstPaid || "0"
+      }).onConflictDoNothing();
+    }
+
+    // Load Client Type & Industry reference mappings
+    console.log("🌱 Syncing Client Type & Industry reference mappings...");
+    try {
+      await db.execute(sql`DELETE FROM client_type_industry_mapping`);
+      console.log("Cleared old client_type_industry_mapping items.");
+    } catch (clearErr) {
+      console.warn("Could not clear client_type_industry_mapping:", clearErr);
+    }
+    let mapId = 1;
+    for (const item of CLIENT_INDUSTRY_MAPPING) {
+      await db.insert(clientTypeIndustryMapping).values({
+        id: `m-${mapId++}`,
+        clientType: item.clientType,
+        industry: item.industry
+      }).onConflictDoNothing();
+    }
+
+    // Load default leave balances
+    for (const e of mockEmployees) {
+      const lbId = `lb-${e.id}`;
+      await db.execute(sql`
+        INSERT INTO leave_balances (id, employee_id, year, casual_leave_balance, sick_leave_balance, earned_leave_balance, total_leave_balance)
+        VALUES (${lbId}, ${e.id}, 2026, 12, 8, 15, 35)
+        ON CONFLICT (id) DO NOTHING;
+      `);
+    }
+
+    // Check if empty, and seed remaining tables
     const employeeCountResult = await db.execute(sql`SELECT count(*) FROM employees`);
     const count = parseInt(String(employeeCountResult.rows[0]?.count || '0'), 10);
     
-    if (count === 0) {
-      console.log("🌱 Database is empty! Auto-seeding initial metadata & mock records...");
-      
-      // Load departments
-      for (const d of mockDepartments) {
-        await db.insert(departments).values(d).onConflictDoNothing();
-      }
+    // Since we just loaded employees, count will be at least the number of mockEmployees.
+    // Let's check client count to determine if we need to seed transactional tables.
+    const clientCountResult = await db.execute(sql`SELECT count(*) FROM clients`);
+    const clientCount = parseInt(String(clientCountResult.rows[0]?.count || '0'), 10);
 
-      // Load employees
-      for (const e of mockEmployees) {
-        await db.insert(employees).values({
-          id: e.id,
-          employeeCode: e.employee_code,
-          aadharNumber: e.aadhar_number || null,
-          firstName: e.first_name || null,
-          lastName: e.last_name || null,
-          name: e.name,
-          dateOfBirth: e.date_of_birth || null,
-          gender: e.gender || null,
-          email: e.email || null,
-          phone: e.phone || null,
-          address: e.address || null,
-          city: e.city || null,
-          state: e.state || null,
-          postalCode: e.postal_code || null,
-          hireDate: e.hire_date || null,
-          employmentStatus: e.employment_status || null,
-          departmentId: e.department_id || null,
-          departmentName: e.department_name || null,
-          managerId: e.manager_id || null,
-          jobTitle: e.job_title || null,
-          title: e.title || null,
-          department: e.department || null,
-          dailyWage: e.daily_wage || null,
-          dailyIncentiveEarned: e.daily_incentive_earned || null,
-          hourlyRate: e.hourly_rate || null,
-          salary: e.salary || null,
-          profilePhoto: e.profile_photo || null,
-          serviceArea: e.service_area || '',
-          skills: e.skills || null,
-          certifications: e.certifications || null,
-          availability: e.availability || 'AVAILABLE',
-          status: e.status || 'ACTIVE',
-          plateNumber: e.plate_number || null,
-          make: e.make || null,
-          model: e.model || null,
-          year: e.year || null,
-        }).onConflictDoNothing();
-      }
-
-      // Load skills
-      for (const s of mockEmployeeSkills) {
-        await db.insert(employeeSkills).values({
-          id: s.id,
-          employeeId: s.employee_id,
-          skillName: s.skill_name,
-          skillLevel: s.skill_level || null,
-          certificateNumber: s.certificate_number || null,
-          issuingAuthority: s.issuing_authority || null,
-          issueDate: s.issue_date || null,
-        }).onConflictDoNothing();
-      }
+    if (clientCount === 0) {
+      console.log("🌱 Database transactional tables are empty! Auto-seeding remaining mock records...");
 
       // Load clients
       for (const c of mockClients) {
@@ -529,12 +900,18 @@ async function initDb() {
 
 // Connection status check
 app.get("/api/status", async (req, res) => {
-  const isEnvConfigured = !!process.env.DATABASE_URL;
+  const isEnvConfigured = !!(
+    process.env.NEON_DATABASE_URL ||
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.PGHOST
+  );
   if (!isEnvConfigured) {
     return res.json({
       connected: false,
       configured: false,
-      message: "DATABASE_URL environment variable is missing."
+      message: "Database environment variable (e.g. DATABASE_URL) is missing."
     });
   }
 
@@ -566,6 +943,7 @@ app.post("/api/seed", async (req, res) => {
     await db.execute(sql`DELETE FROM employee_skills`);
     await db.execute(sql`DELETE FROM employees`);
     await db.execute(sql`DELETE FROM departments`);
+    await db.execute(sql`DELETE FROM hvac_catalog`);
 
     // Reset database
     const success = await initDb();
@@ -590,6 +968,8 @@ app.get("/api/all", async (req, res) => {
     const rawSites = await db.select().from(sites);
     const rawProjs = await db.select().from(projects);
     const rawTasks = await db.select().from(tasks);
+    const rawCatalogItems = await db.select().from(hvacCatalog);
+    const rawVendors = await db.select().from(vendors);
 
     // Map database properties back to camelCase/expected typings nicely
     const employeesMapped = rawEmps.map(e => ({
@@ -804,8 +1184,19 @@ app.get("/api/all", async (req, res) => {
     let rawLeaveBalances: any[] = [];
     let rawSalaryStructures: any[] = [];
     let rawPayroll: any[] = [];
+    let rawSalaryTransfers: any[] = [];
+    let rawQuotations: any[] = [];
+    let rawPurchaseOrders: any[] = [];
+    let rawClientMappings: any[] = CLIENT_INDUSTRY_MAPPING.map((m, i) => ({ id: `m-${i+1}`, clientType: m.clientType, industry: m.industry }));
+    let rawUsers: any[] = [];
 
     if (dbConnected) {
+      try {
+        const usersRes = await db.execute(sql`SELECT * FROM users`);
+        rawUsers = usersRes.rows || [];
+      } catch (e) {
+        console.warn("Could not query users:", e);
+      }
       try {
         const attRes = await db.execute(sql`SELECT * FROM attendance`);
         rawAttendance = attRes.rows || [];
@@ -836,6 +1227,36 @@ app.get("/api/all", async (req, res) => {
       } catch (e) {
         console.warn("Could not query payroll:", e);
       }
+      try {
+        const transferRes = await db.execute(sql`SELECT * FROM salary_transfer_logs`);
+        rawSalaryTransfers = transferRes.rows || [];
+      } catch (e) {
+        console.warn("Could not query salary_transfer_logs:", e);
+      }
+      try {
+        const qRes = await db.execute(sql`SELECT * FROM quotations`);
+        rawQuotations = qRes.rows || [];
+      } catch (e) {
+        console.warn("Could not query quotations:", e);
+      }
+      try {
+        const poRes = await db.execute(sql`SELECT * FROM purchase_orders`);
+        rawPurchaseOrders = poRes.rows || [];
+      } catch (e) {
+        console.warn("Could not query purchase_orders:", e);
+      }
+      try {
+        const mappingRes = await db.select().from(clientTypeIndustryMapping);
+        if (mappingRes && mappingRes.length > 0) {
+          rawClientMappings = mappingRes;
+        }
+      } catch (e) {
+        console.warn("Could not query client_type_industry_mapping:", e);
+      }
+    }
+
+    if (!rawUsers || rawUsers.length === 0) {
+      rawUsers = inMemoryUsers;
     }
 
     res.json({
@@ -916,10 +1337,409 @@ app.get("/api/all", async (req, res) => {
         net_salary: Number(p.net_salary || 0),
         payment_date: p.payment_date,
         payment_status: p.payment_status
+      })),
+      quotations: rawQuotations.map(q => ({
+        id: q.id,
+        quotation_number: q.quotation_number,
+        client_id: q.client_id,
+        client_name: q.client_name,
+        project_id: q.project_id,
+        project_name: q.project_name,
+        quotation_date: q.quotation_date,
+        valid_until: q.valid_until,
+        status: q.status,
+        subtotal: Number(q.subtotal || 0),
+        tax_rate: Number(q.tax_rate || 0),
+        tax_amount: Number(q.tax_amount || 0),
+        discount_amount: Number(q.discount_amount || 0),
+        grand_total: Number(q.grand_total || 0),
+        terms_conditions: q.terms_conditions,
+        notes: q.notes,
+        items: typeof q.items === 'string' ? JSON.parse(q.items) : (q.items || [])
+      })),
+      purchaseOrders: rawPurchaseOrders.map(po => ({
+        id: po.id,
+        po_number: po.po_number,
+        vendor_name: po.vendor_name,
+        vendor_address: po.vendor_address,
+        vendor_gst: po.vendor_gst,
+        client_id: po.client_id,
+        client_name: po.client_name,
+        project_id: po.project_id,
+        project_name: po.project_name,
+        po_date: po.po_date,
+        delivery_date: po.delivery_date,
+        status: po.status,
+        subtotal: Number(po.subtotal || 0),
+        tax_rate: Number(po.tax_rate || 0),
+        tax_amount: Number(po.tax_amount || 0),
+        shipping_handling: Number(po.shipping_handling || 0),
+        grand_total: Number(po.grand_total || 0),
+        payment_terms: po.payment_terms,
+        notes: po.notes,
+        items: typeof po.items === 'string' ? JSON.parse(po.items) : (po.items || []),
+        delivery_address: po.delivery_address,
+        vendor_contact_person: po.vendor_contact_person,
+        quotation_id: po.quotation_id,
+        quotation_number: po.quotation_number
+      })),
+      vendors: rawVendors.map(v => ({
+        id: v.id,
+        name: v.name,
+        address: v.address || '',
+        gst: v.gst || '',
+        contact_person: v.contactPerson || '',
+        phone: v.phone || '',
+        email: v.email || ''
+      })),
+      salaryTransfers: rawSalaryTransfers.map(st => ({
+        id: st.id,
+        payroll_id: st.payroll_id,
+        employee_id: st.employee_id,
+        amount: Number(st.amount || 0),
+        transfer_date: st.transfer_date,
+        payroll_month: st.payroll_month,
+        reference_number: st.reference_number,
+        payment_method: st.payment_method
+      })),
+      hvacCatalog: rawCatalogItems.map(mapDbToCatalogItem),
+      clientTypeIndustryMapping: rawClientMappings.map(m => ({
+        id: m.id,
+        clientType: m.clientType,
+        industry: m.industry
+      })),
+      users: rawUsers.map(u => ({
+        id: u.id,
+        email: u.email,
+        password: u.password, // Include password for admin fetching/editing
+        role: u.role,
+        name: u.name,
+        phone: u.phone,
+        status: u.status
       }))
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to load database records." });
+  }
+});
+
+// --- AUTH & USER ENDPOINTS ---
+
+// Login Endpoint
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required." });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    let user: any = null;
+
+    if (dbConnected) {
+      try {
+        const result = await db.execute(sql`SELECT * FROM users WHERE LOWER(email) = ${cleanEmail}`);
+        if (result.rows && result.rows.length > 0) {
+          user = result.rows[0];
+        }
+      } catch (err) {
+        console.warn("Could not login via database, falling back to memory:", err);
+      }
+    }
+
+    // Fallback to check inMemoryUsers
+    if (!user) {
+      user = inMemoryUsers.find(u => u.email.toLowerCase() === cleanEmail);
+    }
+
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "");
+    const ua = String(req.headers["user-agent"] || "");
+    const ts = new Date().toISOString();
+
+    if (!user) {
+      if (dbConnected) {
+        try {
+          const logId = `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+          await db.execute(sql`
+            INSERT INTO login_logs (id, user_id, email, action, ip_address, user_agent, timestamp)
+            VALUES (${logId}, NULL, ${cleanEmail}, 'LOGIN_FAILURE_NOT_FOUND', ${ip}, ${ua}, ${ts})
+          `);
+        } catch (logErr) {
+          console.warn("Failed to write login log:", logErr);
+        }
+      }
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    if (user.password !== password) {
+      if (dbConnected) {
+        try {
+          const logId = `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+          await db.execute(sql`
+            INSERT INTO login_logs (id, user_id, email, action, ip_address, user_agent, timestamp)
+            VALUES (${logId}, ${user.id}, ${cleanEmail}, 'LOGIN_FAILURE_WRONG_PASSWORD', ${ip}, ${ua}, ${ts})
+          `);
+        } catch (logErr) {
+          console.warn("Failed to write login log:", logErr);
+        }
+      }
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    // Write login success log
+    if (dbConnected) {
+      try {
+        const logId = `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        await db.execute(sql`
+          INSERT INTO login_logs (id, user_id, email, action, ip_address, user_agent, timestamp)
+          VALUES (${logId}, ${user.id}, ${cleanEmail}, 'LOGIN_SUCCESS', ${ip}, ${ua}, ${ts})
+        `);
+      } catch (logErr) {
+        console.warn("Failed to write login log:", logErr);
+      }
+    }
+
+    res.json({
+      status: "success",
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        phone: user.phone,
+        status: user.status
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Login failed." });
+  }
+});
+
+// Register Endpoint
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const { email, password, name, phone } = req.body;
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: "Email, password, and name are required." });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    let exists = false;
+
+    // 1. Check if user exists in database
+    if (dbConnected) {
+      try {
+        const existsRes = await db.execute(sql`SELECT id FROM users WHERE LOWER(email) = ${cleanEmail}`);
+        if (existsRes.rows && existsRes.rows.length > 0) {
+          exists = true;
+        }
+      } catch (err) {
+        console.warn("Database check for existing user failed, checking memory:", err);
+      }
+    }
+
+    // 2. Check in memory
+    if (!exists) {
+      exists = inMemoryUsers.some(u => u.email.toLowerCase() === cleanEmail);
+    }
+
+    if (exists) {
+      return res.status(400).json({ error: "A user with this email already exists." });
+    }
+
+    // Role promotion if admin email matching
+    const role = cleanEmail === 'aijaz523@gmail.com' ? 'admin' : 'user';
+    const userId = `u-${Date.now()}`;
+    const newUser = {
+      id: userId,
+      email: cleanEmail,
+      password,
+      role,
+      name,
+      phone: phone || null,
+      status: 'ACTIVE'
+    };
+
+    // Save to memory cache
+    inMemoryUsers.push(newUser);
+
+    // Save to database if connected
+    if (dbConnected) {
+      try {
+        await db.execute(sql`
+          INSERT INTO users (id, email, password, role, name, phone, status)
+          VALUES (${userId}, ${cleanEmail}, ${password}, ${role}, ${name}, ${phone || null}, 'ACTIVE')
+        `);
+
+        // Log registration log
+        const logId = `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "");
+        const ua = String(req.headers["user-agent"] || "");
+        const ts = new Date().toISOString();
+        await db.execute(sql`
+          INSERT INTO login_logs (id, user_id, email, action, ip_address, user_agent, timestamp)
+          VALUES (${logId}, ${userId}, ${cleanEmail}, 'REGISTER_SUCCESS', ${ip}, ${ua}, ${ts})
+        `);
+      } catch (dbErr: any) {
+        console.error("Failed to insert registered user into database:", dbErr);
+      }
+    }
+
+    res.json({
+      status: "success",
+      user: {
+        id: userId,
+        email: cleanEmail,
+        role,
+        name,
+        phone,
+        status: 'ACTIVE'
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Registration failed." });
+  }
+});
+
+// List Users (Including password for admin configuration view)
+app.get("/api/users", async (req, res) => {
+  try {
+    let dbUsers: any[] = [];
+    if (dbConnected) {
+      try {
+        const result = await db.execute(sql`SELECT id, email, password, role, name, phone, status, employee_id FROM users`);
+        dbUsers = result.rows || [];
+      } catch (err) {
+        console.warn("Failed to fetch users from database, using memory cache:", err);
+      }
+    }
+
+    if (dbUsers.length === 0) {
+      dbUsers = inMemoryUsers;
+    }
+
+    res.json(dbUsers.map(u => ({
+      id: u.id,
+      email: u.email,
+      password: u.password, // Return password so admin can view/verify it
+      role: u.role,
+      name: u.name,
+      phone: u.phone,
+      status: u.status,
+      employeeId: u.employeeId || u.employee_id || null
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to fetch users." });
+  }
+});
+
+// Delete User
+app.delete("/api/users/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Delete from memory
+    const memIdx = inMemoryUsers.findIndex(u => u.id === id);
+    if (memIdx !== -1) {
+      inMemoryUsers.splice(memIdx, 1);
+    }
+
+    // Delete from database
+    if (dbConnected) {
+      await db.execute(sql`DELETE FROM users WHERE id = ${id}`);
+    }
+
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to delete user." });
+  }
+});
+
+// Update User
+app.put("/api/users/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role, name, phone, status, password } = req.body;
+
+    // Update in-memory user
+    const memUser = inMemoryUsers.find(u => u.id === id);
+    if (memUser) {
+      if (role !== undefined) memUser.role = role;
+      if (name !== undefined) memUser.name = name;
+      if (phone !== undefined) memUser.phone = phone;
+      if (status !== undefined) memUser.status = status;
+      if (password !== undefined) memUser.password = password;
+    }
+
+    // Update in database
+    if (dbConnected) {
+      if (password) {
+        await db.execute(sql`
+          UPDATE users 
+          SET role = COALESCE(${role}, role), 
+              name = COALESCE(${name}, name), 
+              phone = COALESCE(${phone}, phone), 
+              status = COALESCE(${status}, status),
+              password = ${password}
+          WHERE id = ${id}
+        `);
+      } else {
+        await db.execute(sql`
+          UPDATE users 
+          SET role = COALESCE(${role}, role), 
+              name = COALESCE(${name}, name), 
+              phone = COALESCE(${phone}, phone), 
+              status = COALESCE(${status}, status)
+          WHERE id = ${id}
+        `);
+      }
+    }
+
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to update user." });
+  }
+});
+
+// Client Type & Industry Mapping Reference Table Endpoints
+app.get("/api/client-mappings", async (req, res) => {
+  try {
+    const rawMappings = await db.select().from(clientTypeIndustryMapping);
+    res.json(rawMappings.map(m => ({
+      id: m.id,
+      clientType: m.clientType,
+      industry: m.industry
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to fetch client mappings." });
+  }
+});
+
+app.post("/api/client-mappings", async (req, res) => {
+  try {
+    const { id, clientType, industry } = req.body;
+    if (!clientType || !industry) {
+      return res.status(400).json({ error: "clientType and industry are required." });
+    }
+    const mappingId = id || `m-${Date.now()}`;
+    await db.insert(clientTypeIndustryMapping).values({
+      id: mappingId,
+      clientType,
+      industry
+    }).onConflictDoNothing();
+    res.status(251).json({ status: "ok", id: mappingId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/client-mappings/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.delete(clientTypeIndustryMapping).where(eq(clientTypeIndustryMapping.id, id));
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -951,7 +1771,7 @@ app.post("/api/attendance", async (req, res) => {
 app.delete("/api/attendance/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await db.execute(sql`DELETE FROM attendance WHERE id = ${id}`);
+    await pool.query('DELETE FROM attendance WHERE id = $1', [id]);
     res.json({ status: "ok" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -992,7 +1812,7 @@ app.put("/api/leave_requests/:id/approve", async (req, res) => {
 app.delete("/api/leave_requests/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await db.execute(sql`DELETE FROM leave_requests WHERE id = ${id}`);
+    await pool.query('DELETE FROM leave_requests WHERE id = $1', [id]);
     res.json({ status: "ok" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1066,6 +1886,28 @@ app.put("/api/payroll/:id/payment", async (req, res) => {
       SET payment_status = ${payment_status}, payment_date = ${payment_date}
       WHERE id = ${id}
     `);
+
+    if (payment_status === 'Paid') {
+      // Fetch the payroll details
+      const payRes = await db.execute(sql`SELECT * FROM payroll WHERE id = ${id}`);
+      if (payRes.rows && payRes.rows.length > 0) {
+        const pay = payRes.rows[0] as any;
+        
+        // Check if a transfer log for this payroll already exists to avoid duplicates
+        const logCheck = await db.execute(sql`SELECT * FROM salary_transfer_logs WHERE payroll_id = ${id}`);
+        if (!logCheck.rows || logCheck.rows.length === 0) {
+          const logId = 'TFR-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+          const refNum = 'TXN-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+          const pDate = payment_date || new Date().toISOString().split('T')[0];
+          
+          await db.execute(sql`
+            INSERT INTO salary_transfer_logs (id, payroll_id, employee_id, amount, transfer_date, payroll_month, reference_number, payment_method)
+            VALUES (${logId}, ${pay.id}, ${pay.employee_id}, ${pay.net_salary}, ${pDate}, ${pay.payroll_month}, ${refNum}, 'Bank Transfer')
+          `);
+        }
+      }
+    }
+
     res.json({ status: "ok" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1076,7 +1918,53 @@ app.put("/api/payroll/:id/payment", async (req, res) => {
 app.delete("/api/payroll/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await db.execute(sql`DELETE FROM payroll WHERE id = ${id}`);
+    await pool.query('DELETE FROM payroll WHERE id = $1', [id]);
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET Salary Transfer Logs
+app.get("/api/salary-transfers", async (req, res) => {
+  try {
+    const tRes = await db.execute(sql`SELECT * FROM salary_transfer_logs`);
+    const logs = tRes.rows || [];
+    res.json(logs.map((st: any) => ({
+      id: st.id,
+      payroll_id: st.payroll_id,
+      employee_id: st.employee_id,
+      amount: Number(st.amount || 0),
+      transfer_date: st.transfer_date,
+      payroll_month: st.payroll_month,
+      reference_number: st.reference_number,
+      payment_method: st.payment_method
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST Salary Transfer Log
+app.post("/api/salary-transfers", async (req, res) => {
+  try {
+    const { id, payroll_id, employee_id, amount, transfer_date, payroll_month, reference_number, payment_method } = req.body;
+    const resolvedPayrollId = payroll_id && payroll_id.trim() !== '' ? payroll_id : null;
+    await db.execute(sql`
+      INSERT INTO salary_transfer_logs (id, payroll_id, employee_id, amount, transfer_date, payroll_month, reference_number, payment_method)
+      VALUES (${id}, ${resolvedPayrollId}, ${employee_id}, ${amount}, ${transfer_date}, ${payroll_month}, ${reference_number}, ${payment_method})
+    `);
+    res.status(251).json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE Salary Transfer Log
+app.delete("/api/salary-transfers/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.execute(sql`DELETE FROM salary_transfer_logs WHERE id = ${id}`);
     res.json({ status: "ok" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1144,6 +2032,50 @@ app.post("/api/employees", async (req, res) => {
       }
     }
 
+    // Default leave balances for the new employee
+    const lbId = `lb-${employee.id}`;
+    await db.execute(sql`
+      INSERT INTO leave_balances (id, employee_id, year, casual_leave_balance, sick_leave_balance, earned_leave_balance, total_leave_balance)
+      VALUES (${lbId}, ${employee.id}, 2026, 12, 8, 15, 35)
+      ON CONFLICT (id) DO NOTHING;
+    `);
+
+    // Auto-create user account for this new employee
+    const email = (employee.email && employee.email.trim())
+      ? employee.email.trim().toLowerCase()
+      : `${(employee.employee_code || employee.id).toLowerCase()}@supercool.com`;
+    const userId = `u-emp-${employee.id}`;
+    const name = employee.name;
+    const phone = employee.phone || null;
+
+    const exists = inMemoryUsers.some(u => u.email.toLowerCase() === email);
+    if (!exists) {
+      inMemoryUsers.push({
+        id: userId,
+        email,
+        password: "user123",
+        role: "user",
+        name,
+        phone,
+        status: "ACTIVE",
+        employeeId: employee.id
+      });
+    }
+
+    if (dbConnected) {
+      try {
+        const check = await db.execute(sql`SELECT id FROM users WHERE LOWER(email) = ${email}`);
+        if (!check.rows || check.rows.length === 0) {
+          await db.execute(sql`
+            INSERT INTO users (id, email, password, role, name, phone, status, employee_id)
+            VALUES (${userId}, ${email}, 'user123', 'user', ${name}, ${phone}, 'ACTIVE', ${employee.id})
+          `);
+        }
+      } catch (dbErr: any) {
+        console.warn(`Failed to auto-create user for newly added employee ${name}:`, dbErr.message);
+      }
+    }
+
     res.status(201).json({ status: "ok" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1154,8 +2086,24 @@ app.post("/api/employees", async (req, res) => {
 app.delete("/api/employees/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await db.delete(employeeSkills).where(eq(employeeSkills.employeeId, id));
-    await db.delete(employees).where(eq(employees.id, id));
+    
+    // Clear foreign key references in tasks and projects to allow safe deletion
+    await pool.query('UPDATE tasks SET assignee_id = NULL WHERE assignee_id = $1', [id]);
+    await pool.query('UPDATE projects SET project_manager_id = NULL WHERE project_manager_id = $1', [id]);
+    await pool.query('UPDATE projects SET site_engineer_id = NULL WHERE site_engineer_id = $1', [id]);
+    await pool.query('UPDATE projects SET supervisor_id = NULL WHERE supervisor_id = $1', [id]);
+    
+    // Safe sequential deletion across all referencing sub-records
+    await pool.query('DELETE FROM employee_skills WHERE employee_id = $1', [id]);
+    await pool.query('DELETE FROM attendance WHERE employee_id = $1', [id]);
+    await pool.query('DELETE FROM leave_requests WHERE employee_id = $1', [id]);
+    await pool.query('DELETE FROM leave_balances WHERE employee_id = $1', [id]);
+    await pool.query('DELETE FROM salary_structures WHERE employee_id = $1', [id]);
+    await pool.query('DELETE FROM payroll WHERE employee_id = $1', [id]);
+    
+    // Delete the final employee record itself
+    await pool.query('DELETE FROM employees WHERE id = $1', [id]);
+    
     res.json({ status: "ok" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1654,6 +2602,331 @@ app.put("/api/employees/:id", async (req, res) => {
   }
 });
 
+// Quotation REST Routes
+app.post("/api/quotations", async (req, res) => {
+  try {
+    const { id, quotation_number, client_id, client_name, project_id, project_name, quotation_date, valid_until, status, subtotal, tax_rate, tax_amount, discount_amount, grand_total, terms_conditions, notes, items } = req.body;
+    
+    await pool.query(`
+      INSERT INTO quotations (id, quotation_number, client_id, client_name, project_id, project_name, quotation_date, valid_until, status, subtotal, tax_rate, tax_amount, discount_amount, grand_total, terms_conditions, notes, items)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      ON CONFLICT (id) DO UPDATE SET
+        quotation_number = EXCLUDED.quotation_number,
+        client_id = EXCLUDED.client_id,
+        client_name = EXCLUDED.client_name,
+        project_id = EXCLUDED.project_id,
+        project_name = EXCLUDED.project_name,
+        quotation_date = EXCLUDED.quotation_date,
+        valid_until = EXCLUDED.valid_until,
+        status = EXCLUDED.status,
+        subtotal = EXCLUDED.subtotal,
+        tax_rate = EXCLUDED.tax_rate,
+        tax_amount = EXCLUDED.tax_amount,
+        discount_amount = EXCLUDED.discount_amount,
+        grand_total = EXCLUDED.grand_total,
+        terms_conditions = EXCLUDED.terms_conditions,
+        notes = EXCLUDED.notes,
+        items = EXCLUDED.items
+    `, [id, quotation_number, client_id, client_name, project_id, project_name, quotation_date, valid_until, status, subtotal, tax_rate, tax_amount, discount_amount, grand_total, terms_conditions, notes, typeof items === 'string' ? items : JSON.stringify(items)]);
+    
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/quotations/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { quotation_number, client_id, client_name, project_id, project_name, quotation_date, valid_until, status, subtotal, tax_rate, tax_amount, discount_amount, grand_total, terms_conditions, notes, items } = req.body;
+    
+    await pool.query(`
+      UPDATE quotations SET
+        quotation_number = $1,
+        client_id = $2,
+        client_name = $3,
+        project_id = $4,
+        project_name = $5,
+        quotation_date = $6,
+        valid_until = $7,
+        status = $8,
+        subtotal = $9,
+        tax_rate = $10,
+        tax_amount = $11,
+        discount_amount = $12,
+        grand_total = $13,
+        terms_conditions = $14,
+        notes = $15,
+        items = $16
+      WHERE id = $17
+    `, [quotation_number, client_id, client_name, project_id, project_name, quotation_date, valid_until, status, subtotal, tax_rate, tax_amount, discount_amount, grand_total, terms_conditions, notes, typeof items === 'string' ? items : JSON.stringify(items), id]);
+    
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/quotations/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM quotations WHERE id = $1', [id]);
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Purchase Order REST Routes
+app.post("/api/purchase_orders", async (req, res) => {
+  try {
+    const { id, po_number, vendor_name, vendor_address, vendor_gst, client_id, client_name, project_id, project_name, po_date, delivery_date, status, subtotal, tax_rate, tax_amount, shipping_handling, grand_total, payment_terms, notes, items, delivery_address, vendor_contact_person, quotation_id, quotation_number } = req.body;
+    
+    await pool.query(`
+      INSERT INTO purchase_orders (id, po_number, vendor_name, vendor_address, vendor_gst, client_id, client_name, project_id, project_name, po_date, delivery_date, status, subtotal, tax_rate, tax_amount, shipping_handling, grand_total, payment_terms, notes, items, delivery_address, vendor_contact_person, quotation_id, quotation_number)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+      ON CONFLICT (id) DO UPDATE SET
+        po_number = EXCLUDED.po_number,
+        vendor_name = EXCLUDED.vendor_name,
+        vendor_address = EXCLUDED.vendor_address,
+        vendor_gst = EXCLUDED.vendor_gst,
+        client_id = EXCLUDED.client_id,
+        client_name = EXCLUDED.client_name,
+        project_id = EXCLUDED.project_id,
+        project_name = EXCLUDED.project_name,
+        po_date = EXCLUDED.po_date,
+        delivery_date = EXCLUDED.delivery_date,
+        status = EXCLUDED.status,
+        subtotal = EXCLUDED.subtotal,
+        tax_rate = EXCLUDED.tax_rate,
+        tax_amount = EXCLUDED.tax_amount,
+        shipping_handling = EXCLUDED.shipping_handling,
+        grand_total = EXCLUDED.grand_total,
+        payment_terms = EXCLUDED.payment_terms,
+        notes = EXCLUDED.notes,
+        items = EXCLUDED.items,
+        delivery_address = EXCLUDED.delivery_address,
+        vendor_contact_person = EXCLUDED.vendor_contact_person,
+        quotation_id = EXCLUDED.quotation_id,
+        quotation_number = EXCLUDED.quotation_number
+    `, [id, po_number, vendor_name, vendor_address, vendor_gst, client_id, client_name, project_id, project_name, po_date, delivery_date, status, subtotal, tax_rate, tax_amount, shipping_handling, grand_total, payment_terms, notes, typeof items === 'string' ? items : JSON.stringify(items), delivery_address, vendor_contact_person, quotation_id, quotation_number]);
+    
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/purchase_orders/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { po_number, vendor_name, vendor_address, vendor_gst, client_id, client_name, project_id, project_name, po_date, delivery_date, status, subtotal, tax_rate, tax_amount, shipping_handling, grand_total, payment_terms, notes, items, delivery_address, vendor_contact_person, quotation_id, quotation_number } = req.body;
+    
+    await pool.query(`
+      UPDATE purchase_orders SET
+        po_number = $1,
+        vendor_name = $2,
+        vendor_address = $3,
+        vendor_gst = $4,
+        client_id = $5,
+        client_name = $6,
+        project_id = $7,
+        project_name = $8,
+        po_date = $9,
+        delivery_date = $10,
+        status = $11,
+        subtotal = $12,
+        tax_rate = $13,
+        tax_amount = $14,
+        shipping_handling = $15,
+        grand_total = $16,
+        payment_terms = $17,
+        notes = $18,
+        items = $19,
+        delivery_address = $20,
+        vendor_contact_person = $21,
+        quotation_id = $22,
+        quotation_number = $23
+      WHERE id = $24
+    `, [po_number, vendor_name, vendor_address, vendor_gst, client_id, client_name, project_id, project_name, po_date, delivery_date, status, subtotal, tax_rate, tax_amount, shipping_handling, grand_total, payment_terms, notes, typeof items === 'string' ? items : JSON.stringify(items), delivery_address, vendor_contact_person, quotation_id, quotation_number, id]);
+    
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/purchase_orders/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM purchase_orders WHERE id = $1', [id]);
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- HVAC CATALOG API ENDPOINTS ---
+
+// Helper function to map database hvac_catalog row back to CatalogItem format for the client
+function mapDbToCatalogItem(item: any) {
+  const isDaikin = !!item.series;
+  
+  // Extract Name
+  let name = "";
+  if (isDaikin) {
+    name = `Daikin ${item.series || ""} AC ${item.coolingTr || ""} TR (${item.fcu})`;
+  } else {
+    // For low-side, we stored "itemName [Unit: unit]. category - subCategory..." in description
+    const firstDotIdx = item.description ? item.description.indexOf(". ") : -1;
+    const namePart = firstDotIdx > -1 ? item.description.slice(0, firstDotIdx) : (item.description || "");
+    const cleanName = namePart.replace(/\s*\[Unit:\s*[^\]]+\]/, "");
+    name = cleanName || item.fcu || "Low Side Item";
+  }
+
+  // Extract Unit
+  let unit = "set";
+  if (!isDaikin && item.description) {
+    const unitMatch = item.description.match(/\[Unit:\s*([^\]]+)\]/);
+    if (unitMatch) {
+      unit = unitMatch[1];
+    }
+  }
+
+  // Extract Category
+  let category = "Cassette";
+  if (isDaikin) {
+    const lowerType = (item.type || "").toLowerCase();
+    if (lowerType.includes("ductable") || lowerType.includes("concealed")) {
+      category = "Ductable";
+    } else if (lowerType.includes("floor") || lowerType.includes("tower")) {
+      category = "Floor Standing";
+    }
+  } else if (item.description) {
+    const parts = item.description.split(". ");
+    if (parts.length > 1) {
+      const catSubcat = parts[1].split(" - ");
+      if (catSubcat.length > 0) {
+        category = catSubcat[0].trim();
+      }
+    }
+  }
+
+  // Extract Department
+  const department = isDaikin ? "Major Components" : "LOW SIDE Material & Services";
+
+  // Price
+  const price = Number(item.unitPriceWoTax || 0);
+
+  return {
+    sku: item.fcu, // Map fcu as sku for frontend compatibility
+    name,
+    department,
+    category,
+    unit,
+    price,
+    description: item.description,
+    isFavorite: item.isFavorite === 1,
+    series: item.series || "",
+    type: item.type || "",
+    technology: item.technology || "",
+    mode: item.mode || "",
+    starRating: item.starRating || "",
+    refrigerant: item.refrigerant || "",
+    powerSupply: item.powerSupply || "",
+    coolingTr: item.coolingTr || "",
+    heatingTr: item.heatingTr || "",
+    fcu: item.fcu || "",
+    cu: item.cu || "",
+    mrpSetBase: item.mrpSetBase || "0",
+    dbpWithoutTax: item.dbpWithoutTax || "0",
+    discount: item.discount || "",
+    unitPriceWoTax: item.unitPriceWoTax || "0",
+    nlcGstPaid: item.nlcGstPaid || "0"
+  };
+}
+
+// GET /api/catalog
+app.get("/api/catalog", async (req, res) => {
+  try {
+    const rawCatalog = await db.select().from(hvacCatalog);
+    res.json(rawCatalog.map(mapDbToCatalogItem));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to load catalog." });
+  }
+});
+
+// POST /api/catalog
+app.post("/api/catalog", async (req, res) => {
+  try {
+    const item = req.body;
+    const fcu = item.fcu || item.sku || "";
+    await db.insert(hvacCatalog).values({
+      fcu,
+      description: item.description,
+      isFavorite: item.isFavorite ? 1 : 0,
+      series: item.series || "",
+      type: item.type || "",
+      technology: item.technology || "",
+      mode: item.mode || "",
+      starRating: item.starRating || "",
+      refrigerant: item.refrigerant || "",
+      powerSupply: item.powerSupply || "",
+      coolingTr: item.coolingTr || "",
+      heatingTr: item.heatingTr || "",
+      cu: item.cu || "",
+      mrpSetBase: item.mrpSetBase || "0",
+      dbpWithoutTax: item.dbpWithoutTax || "0",
+      discount: item.discount || "",
+      unitPriceWoTax: item.unitPriceWoTax || String(item.price || "0"),
+      nlcGstPaid: item.nlcGstPaid || "0"
+    });
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to create catalog item." });
+  }
+});
+
+// PUT /api/catalog/:sku
+app.put("/api/catalog/:sku", async (req, res) => {
+  try {
+    const sku = req.params.sku;
+    const item = req.body;
+    await db.update(hvacCatalog).set({
+      description: item.description,
+      isFavorite: item.isFavorite ? 1 : 0,
+      series: item.series || "",
+      type: item.type || "",
+      technology: item.technology || "",
+      mode: item.mode || "",
+      starRating: item.starRating || "",
+      refrigerant: item.refrigerant || "",
+      powerSupply: item.powerSupply || "",
+      coolingTr: item.coolingTr || "",
+      heatingTr: item.heatingTr || "",
+      cu: item.cu || "",
+      mrpSetBase: item.mrpSetBase || "0",
+      dbpWithoutTax: item.dbpWithoutTax || "0",
+      discount: item.discount || "",
+      unitPriceWoTax: item.unitPriceWoTax || String(item.price || "0"),
+      nlcGstPaid: item.nlcGstPaid || "0"
+    }).where(eq(hvacCatalog.fcu, sku));
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to update catalog item." });
+  }
+});
+
+// DELETE /api/catalog/:sku
+app.delete("/api/catalog/:sku", async (req, res) => {
+  try {
+    const sku = req.params.sku;
+    await db.delete(hvacCatalog).where(eq(hvacCatalog.fcu, sku));
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to delete catalog item." });
+  }
+});
 
 // Serve static assets out of /dist when compiled for production, otherwise use Vite's Dev Server middleware
 async function startServer() {
@@ -1661,6 +2934,7 @@ async function startServer() {
   dbConnected = await initDb();
 
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -1679,7 +2953,21 @@ async function startServer() {
   });
 }
 
-startServer().catch(err => {
-  console.error("Fatal server startup error:", err);
-});
+// Export app for serverless deployment platforms like Vercel
+export default app;
+
+if (!process.env.VERCEL) {
+  startServer().catch(err => {
+    console.error("Fatal server startup error:", err);
+  });
+} else {
+  // On Vercel, we still want to trigger the async database connection and schema sync once at cold start
+  initDb().then(success => {
+    dbConnected = success;
+    console.log(`[Vercel Serverless] Database connected and synced: ${success}`);
+  }).catch(err => {
+    console.error("[Vercel Serverless] Failed to initialize DB:", err);
+  });
+}
+
 

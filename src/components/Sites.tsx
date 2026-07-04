@@ -11,6 +11,49 @@ interface SitesProps {
   onUpdateSite: (id: string, site: Site) => void;
 }
 
+function mapIndustryToSiteType(industry?: string): Site['site_type'] {
+  if (!industry) return 'OTHER';
+  const ind = industry.toLowerCase().trim();
+  if (ind.includes('residential')) {
+    return 'RESIDENTIAL';
+  }
+  if (
+    ind.includes('commercial') || 
+    ind.includes('retail') || 
+    ind.includes('hospitality') || 
+    ind.includes('healthcare') || 
+    ind.includes('education') || 
+    ind.includes('data center') || 
+    ind.includes('banking') || 
+    ind.includes('finance') || 
+    ind.includes('food') || 
+    ind.includes('beverage') || 
+    ind.includes('pharmaceutical') || 
+    ind.includes('telecommunication') || 
+    ind.includes('entertainment')
+  ) {
+    return 'COMMERCIAL';
+  }
+  if (
+    ind.includes('industrial') || 
+    ind.includes('manufacture') || 
+    ind.includes('manufacturing') || 
+    ind.includes('warehouse') || 
+    ind.includes('logistics') || 
+    ind.includes('construction') || 
+    ind.includes('real estate') || 
+    ind.includes('agriculture') || 
+    ind.includes('oil') || 
+    ind.includes('gas')
+  ) {
+    return 'INDUSTRIAL';
+  }
+  if (ind.includes('government') || ind.includes('public sector')) {
+    return 'GOVERNMENT';
+  }
+  return 'OTHER';
+}
+
 export default function Sites({ sites, clients, employees, onAddSite, onUpdateSiteStatus, onUpdateSite }: SitesProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
@@ -300,7 +343,18 @@ export default function Sites({ sites, clients, employees, onAddSite, onUpdateSi
                   <label className="font-extrabold uppercase text-gray-400">Parent Client / Customer Account</label>
                   <select 
                     value={editClientId}
-                    onChange={e => setEditClientId(e.target.value)}
+                    onChange={e => {
+                      const cid = e.target.value;
+                      setEditClientId(cid);
+                      const matchedClient = clients.find(c => c.id === cid);
+                      if (matchedClient) {
+                        if (matchedClient.industry) {
+                          setEditPropertyType(matchedClient.industry);
+                        }
+                        const mappedType = mapIndustryToSiteType(matchedClient.industry);
+                        setEditSiteType(mappedType);
+                      }
+                    }}
                     className="w-full text-xs p-3 border border-gray-250 rounded-xl bg-white"
                   >
                     <option value="">-- No Client Account linked --</option>
@@ -320,6 +374,8 @@ export default function Sites({ sites, clients, employees, onAddSite, onUpdateSi
                     <option value="COMMERCIAL">Commercial Building</option>
                     <option value="RESIDENTIAL">Residential Property</option>
                     <option value="INDUSTRIAL">Industrial Site / Factory</option>
+                    <option value="GOVERNMENT">Government Bureaucracy</option>
+                    <option value="OTHER">Other Custom</option>
                   </select>
                 </div>
 
@@ -483,7 +539,7 @@ export default function Sites({ sites, clients, employees, onAddSite, onUpdateSi
                       className="w-full text-xs p-3 border border-gray-250 rounded-xl bg-white"
                     >
                       <option value="">-- Let any assigned Manager/Engineer lead --</option>
-                      {employees.map(emp => (
+                      {employees.filter(emp => emp.status === 'ACTIVE').map(emp => (
                         <option key={emp.id} value={emp.id}>{emp.name} ({emp.title || emp.job_title || 'Technologist'})</option>
                       ))}
                     </select>
@@ -758,7 +814,18 @@ export default function Sites({ sites, clients, employees, onAddSite, onUpdateSi
                   <label className="font-extrabold uppercase text-gray-400">Belongs to Client</label>
                   <select 
                     value={client_id}
-                    onChange={e => setClientId(e.target.value)}
+                    onChange={e => {
+                      const cid = e.target.value;
+                      setClientId(cid);
+                      const linkedClient = clients.find(c => c.id === cid);
+                      if (linkedClient) {
+                        if (linkedClient.industry) {
+                          setPropertyType(linkedClient.industry);
+                        }
+                        const mappedType = mapIndustryToSiteType(linkedClient.industry);
+                        setSiteType(mappedType);
+                      }
+                    }}
                     className="w-full text-sm p-3 border border-gray-200 rounded-xl outline-hidden bg-white focus:ring-1"
                   >
                     <option value="">-- No Linked Client (Individual Client) --</option>
@@ -781,6 +848,17 @@ export default function Sites({ sites, clients, employees, onAddSite, onUpdateSi
                     <option value="GOVERNMENT">Government Bureaucracy</option>
                     <option value="OTHER">Other Custom</option>
                   </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-extrabold uppercase text-gray-400">Property Category / Tag (Inherited Industry)</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Healthcare, Commercial, Residential, or custom" 
+                    value={propertyType}
+                    onChange={e => setPropertyType(e.target.value)}
+                    className="w-full text-sm p-3 border border-gray-200 rounded-xl outline-hidden focus:ring-1"
+                  />
                 </div>
 
                 <div className="space-y-1">
@@ -989,7 +1067,7 @@ export default function Sites({ sites, clients, employees, onAddSite, onUpdateSi
                     className="w-full p-2.5 border border-gray-200 rounded-lg text-sm bg-white font-mono"
                   >
                     <option value="">-- No Direct Supervisor Assigned --</option>
-                    {employees.filter(emp => emp.job_title === 'SUPERVISOR' || emp.job_title === 'MANAGER').map(sup => (
+                    {employees.filter(emp => emp.status === 'ACTIVE' && (emp.job_title === 'SUPERVISOR' || emp.job_title === 'MANAGER')).map(sup => (
                       <option key={sup.id} value={sup.id}>{sup.name} ({sup.title})</option>
                     ))}
                   </select>
